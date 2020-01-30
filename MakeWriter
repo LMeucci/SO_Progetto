@@ -2,10 +2,10 @@ CC= gcc
 CFLAGS= -g -Wall -O2
 #$(wildcard *.h) funzione che prende tutti i file .h nella directory corrente
 HEADERS:= $(wildcard *.h)
-SRC:= $(wildcard *.c)
+SRC:= OnPC_client.c
 OBJ:= $(SRC:%.c=%.o)
 BINS:= $(SRC:%.c=%)
-TARGET= test_polymorphic_list
+TARGET= OnPC_client
 
 .PHONY: all clean install execute
 
@@ -20,7 +20,7 @@ $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 execute:
-	$(TARGET)
+	./$(TARGET)
 
 clean:
 	rm -rf *.o *.~ $(BINS)
