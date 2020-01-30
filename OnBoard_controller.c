@@ -30,7 +30,7 @@ void UART_init(void){
 
 void UART_putChar(uint8_t c){
   // wait for transmission completed, looping on status bit
-  while ( !(UCSR0A & BIT(UDRE0)) );
+  while ( !(UCSR0A & (1<<UDRE0)) );
 
   // Start transmission
   UDR0 = c;
@@ -38,7 +38,7 @@ void UART_putChar(uint8_t c){
 
 uint8_t UART_getChar(void){
   // Wait for incoming data, looping on status bit
-  while ( !(UCSR0A & BIT(RXC0)) );
+  while ( !(UCSR0A & (1<<RXC0)) );
 
   // Return the data
   return UDR0;
@@ -83,8 +83,8 @@ ISR(TIMER1_COMPA_vect) {
 /*--------------------------------------------------------------------------------------------*/
 
 uint8_t check_auth(uint8_t* buf){
-  uint8_t code[16]= (uint8_t*)"codice";
-  uint8_t valid_app= 0;
+  uint8_t* code= (uint8_t*)"codice";
+  uint8_t valid_app= 1;
   int i;
   for(i=0; i<sizeof(buf);++i){
     if(*(buf+i)!= *(code+i)){
@@ -113,36 +113,54 @@ int main(void){
   sei();
 
   uint8_t buf[MAX_BUF];   // Buffer to store incoming data
-  uint8_t commands_enabled= 0;
+  uint8_t commands_enable= 0;
   while(1){
     if(pc_connected_check){
       UART_putString((uint8_t*)"Checking if pc is connected\n");
 
-      while(1){
-        UART_getString(buf);
-        UART_putString((uint8_t*)"Data received: ");
-        UART_putString(buf);
-        UART_putString((uint8_t*)"\n");
+//while(1){                                                                     //DEBUG
+      cli();
+      UART_getString(buf);
+      UART_putString((uint8_t*)"Data received: ");
+      UART_putString(buf);
 
-        UART_putString((uint8_t*)"Checking app authorization\n");
-        if(check_auth(buf)){
-          UART_putString((uint8_t*)"Code accepted\n");
-          commands_enabled=1;
-        }
-        else {
-          UART_putString((uint8_t*)"Invalid code received\n");
-          break;
-        }
+      UART_putString((uint8_t*)"Checking app authorization\n");
+      if(check_auth(buf)){
+        UART_putString((uint8_t*)"Code accepted\n");
+        commands_enable=1;
       }
-      if(commands_enabled){
-        UART_putString((uint8_t*)"Waiting for commands\n");
-        // doing stuff...
-        commands_enabled= 0;
+      else {
+        UART_putString((uint8_t*)"Invalid code received\n");
       }
-
+//}                                                                             //DEBUG
       pc_connected_check=0;
+      sei();
     }
+
+    if(commands_enable){
+      UART_putString((uint8_t*)"Waiting for commands\n");
+      // doing stuff...
+      commands_enable= 0;
+    }
+
   }
-
-
 }
+
+
+
+
+
+/*
+TO DO:
+1- Protocollo Handshake (manca hello inviato da Board a PC)
+2- Binary + checksum com
+3- Non blocking serial operations
+
+*- Device commands
+
+DONE:
+- Timer to check if PC is connected
+- Blocking serial operations using UART FUNCTIONS
+-
+
+*/
