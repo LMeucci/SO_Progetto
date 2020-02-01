@@ -30,7 +30,7 @@ void UART_init(void){
 
 void UART_putChar(uint8_t c){
   // wait for transmission completed, looping on status bit
-  while ( !(UCSR0A & (1<<UDRE0)) );
+  while ( !(UCSR0A & BIT(UDRE0)) );
 
   // Start transmission
   UDR0 = c;
@@ -38,7 +38,7 @@ void UART_putChar(uint8_t c){
 
 uint8_t UART_getChar(void){
   // Wait for incoming data, looping on status bit
-  while ( !(UCSR0A & (1<<RXC0)) );
+  while ( !(UCSR0A & BIT(RXC0)) );
 
   // Return the data
   return UDR0;
@@ -83,16 +83,27 @@ ISR(TIMER1_COMPA_vect) {
 /*--------------------------------------------------------------------------------------------*/
 
 uint8_t check_auth(uint8_t* buf){
-  uint8_t* code= (uint8_t*)"codice";
-  uint8_t valid_app= 1;
+  uint8_t* code= (uint8_t*)"6codice";
+  uint8_t sizeofCode= *code++;
+  uint8_t sizeofBuf= *buf++;
+
+  UART_putChar(sizeofBuf);
+  UART_putString((uint8_t*)" - ");
+  UART_putChar(sizeofCode);
+  if(sizeofBuf != sizeofCode) return 0;
+
   int i;
-  for(i=0; i<sizeof(buf);++i){
+  for(i=0; i<6;i++){     //BUG: se al posto di 6 metto sizeofCode (dovrebbe essere uguale a 6) fà 7 cicli
+    UART_putChar(i);
     if(*(buf+i)!= *(code+i)){
-      valid_app -=1;
-      break;
+      UART_putChar(*(buf+i));
+      UART_putString((uint8_t*)" - ");
+      UART_putChar(*(code+i));
+      UART_putString((uint8_t*)"\n");
+      return 0;
     }
   }
-  return valid_app;
+  return 1;
 }
 
 #define MAX_BUF 256
@@ -118,8 +129,10 @@ int main(void){
     if(pc_connected_check){
       UART_putString((uint8_t*)"Checking if pc is connected\n");
 
-//while(1){                                                                     //DEBUG
       cli();
+//      TIMSK1 &= ~(1 << OCIE1A);   // disable timer interrupt
+//      sei();
+
       UART_getString(buf);
       UART_putString((uint8_t*)"Data received: ");
       UART_putString(buf);
@@ -132,8 +145,10 @@ int main(void){
       else {
         UART_putString((uint8_t*)"Invalid code received\n");
       }
-//}                                                                             //DEBUG
+
       pc_connected_check=0;
+//      cli();
+//      TIMSK1 |= BIT(OCIE1A);  // enable the timer interrupt
       sei();
     }
 

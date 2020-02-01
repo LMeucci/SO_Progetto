@@ -12,7 +12,7 @@
 	/*-------------------------------------------------------------*/
 
 #include <stdio.h>
-#include <string.h>
+#include <string.h> //Necessary?
 #include <stdlib.h>
 #include <fcntl.h>   /* File Control Definitions           */
 #include <termios.h> /* POSIX Terminal Control Definitions */
@@ -78,7 +78,7 @@ void main(void){
 //    char write_buffer[MAX_BUF];
 //    scanf("%s",write_buffer);
 
-  char write_buffer[] = "codice";	/* Buffer containing characters to write into port	     */
+  char write_buffer[] = "6codice";	/* Buffer containing characters to write into port	     */
 	int  bytes_written  = 0;  	/* Value for storing the number of bytes written to the port */
 
 	bytes_written = write(fd,write_buffer, sizeof(write_buffer));  //   /* use write() to send data to port     */
