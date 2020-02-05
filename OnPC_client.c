@@ -72,18 +72,36 @@ void main(void){
 
 	/*             Buffer and packet fields initialization	                       */
 	char write_buffer[MAX_BUF]= {0};
-	char command= 'C';
-	char checksum= '\0';
-	char size= '\0';
-	char message[6]= "\0";
+	char command= 'A';
+	printf("\n  HEX: %x\n",command);
+	char packetNumber= 0;
+	command |= packetNumber;     /* first 2 command bits are used to store packet number (bit stealing) */
+
+	char size= 6;
+	printf("  size: %x\n",size);
+	char sizeControl= 0;
+
+	/* size bits only checksum added to size field(only 5 bits needed) with bit stealing */
+	char temp= size;
+	int k;
+	for(k=0; k<5; k++){
+		sizeControl += temp&1;      /* counting 1 bits among the first 5 bits of size */
+		temp>>=1;
+	}
+	printf("  sizeControl: %x\n",sizeControl);
+	size <<= 3;                  /* making room for size control bits */
+	size |= sizeControl;
+
+	char checksum= 0;
+	char message[6]= {0};
 
 	/* Assembling the packet */
 	*(write_buffer+0)= command;             /* 1° Byte Command     */
 	*(write_buffer+1)= checksum;            /* 2° Byte Checksum    */
 	*(write_buffer+2)= size;                /* 3° Byte Size        */
 
-	printf("HEX: %x\n",command);
-	printf("Calcolo checksum (no carry): ");
+	printf("  # packet: %x\n",packetNumber);
+	printf("  Calcolo checksum (no carry): ");
 	short csum= 0;
 	csum += command+size;
 	int i;
@@ -93,11 +111,13 @@ void main(void){
 	}
 	printf("%x\n",csum);
 	if(csum>>8) csum++;                     /* Checksum carry added if present */
-	printf("Calcolo checksum (carry): %x\n",(char)csum);
+	printf("  Calcolo checksum (carry): %x\n",(char)csum);
 	*(write_buffer+1)= (char)csum;          /* Checksum stored in the packet   */
 
-	int  bytes_written  = 0;  	/* Value for storing the number of bytes written to the port */
-	bytes_written = write(fd,write_buffer, MAX_BUF);  //   /* use write() to send data to port     */
+
+	/*-----------------------------Packet sending-------------------------------------------------------*/
+	int  bytes_written  = 0;  	/* Value for storing the number of bytes written to the port            */
+	bytes_written = write(fd,write_buffer, MAX_BUF);   /*     use write() to send data to port          */
 						           /* "fd"                   - file descriptor pointing to the opened serial port */
 									     /*	"write_buffer"         - address of the buffer containing data	            */
 									     /* "MAX_BUF" - No of bytes to write                               */

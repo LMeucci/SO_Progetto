@@ -44,5 +44,7 @@ Protocollo: invio di pacchetti a dimensione fissa da 32Byte.
 1B Command(6bit cmd + 2bit packet number) + 1B checksum + 1B size(5bit size + 3bit minichecksum) + 0-29B payload
 Checksum sull'intero pacchetto o solo sul comando (se il comando non necessita della payload)
 
+Comandi: ogni comanda è codificato usando 6 bit (MSB) cui vanno aggiunti 2 bit di pacchetto in coda (lsb)
+
 La CPU della scheda è in sleep_mode fintanto che non arriva un intero pacchetto, in tal caso viene processato.
 Verifica della checksum e del numero del pacchetto. Eventualmente il pacchetto viene scartato e inviato un NACK.
