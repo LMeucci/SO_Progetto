@@ -7,26 +7,23 @@
 	      /* Stop bits - 1                                                                              */
 	      /* No Parity                                                                                  */
 /*----------------------------------------------------------------------------------------------------*/
-  /* termios structure -  /usr/include/asm-generic/termbits.h    */
-	/* use "man termios" to get more info about  termios structure */
-	/*-------------------------------------------------------------*/
 
 #include <stdio.h>
-#include <string.h> //Necessary?
+#include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>   /* File Control Definitions           */
 #include <termios.h> /* POSIX Terminal Control Definitions */
 #include <unistd.h>  /* UNIX Standard Definitions 	   */
 #include <errno.h>   /* ERROR Number Definitions           */
 
-#define MAX_BUF 256
+#define MAX_BUF 32
 
 void main(void){
 
 	int fd;            /*File Descriptor*/
 
 	printf("\n +----------------------------------+");
-	printf("\n |        Serial Port Write         |");
+	printf("\n |      SmartHouse: Welcome         |");
 	printf("\n +----------------------------------+");
 
 /*------------------------------- Opening the Serial Port -------------------------------*/
@@ -58,15 +55,13 @@ void main(void){
 	SerialPortSettings.c_cflag &= ~CSIZE;	   /* Clears the mask for setting the data size             */
 	SerialPortSettings.c_cflag |=  CS8;      /* Set the data bits = 8                                 */
 
+
 	SerialPortSettings.c_cflag &= ~CRTSCTS;       /* No Hardware flow Control                         */
 	SerialPortSettings.c_cflag |= CREAD | CLOCAL; /* Enable receiver,Ignore Modem Control lines       */
 
-
-	SerialPortSettings.c_iflag &= ~(IXON | IXOFF | IXANY);
-                                  /* Disable XON/XOFF flow control both i/p and o/p */
-	SerialPortSettings.c_iflag &= ~(ICANON | ECHO | ECHOE | ISIG);  /* Non Cannonical mode            */
-
-	SerialPortSettings.c_oflag &= ~OPOST;/*No Output Processing*/
+	SerialPortSettings.c_iflag &= ~(IXON | IXOFF | IXANY); /* Disable XON/XOFF flow control both i/p and o/p */
+	SerialPortSettings.c_iflag &= ~(ICANON | ECHO | ECHOE | ISIG);  /* Non Cannonical mode */
+	SerialPortSettings.c_oflag &= ~OPOST; /* No Output Processing */
 
 	if((tcsetattr(fd,TCSANOW,&SerialPortSettings)) != 0) /* Set the attributes to the termios structure*/
     printf("\n  ERROR ! in Setting attributes");
@@ -75,16 +70,37 @@ void main(void){
 
 /*------------------------------- Write data to serial port -----------------------------*/
 
-//    char write_buffer[MAX_BUF];
-//    scanf("%s",write_buffer);
+	/*             Buffer and packet fields initialization	                       */
+	char write_buffer[MAX_BUF]= {0};
+	char command= 'C';
+	char checksum= '\0';
+	char size= '\0';
+	char message[6]= "\0";
 
-  char write_buffer[] = "6codice";	/* Buffer containing characters to write into port	     */
+	/* Assembling the packet */
+	*(write_buffer+0)= command;             /* 1° Byte Command     */
+	*(write_buffer+1)= checksum;            /* 2° Byte Checksum    */
+	*(write_buffer+2)= size;                /* 3° Byte Size        */
+
+	printf("HEX: %x\n",command);
+	printf("Calcolo checksum (no carry): ");
+	short csum= 0;
+	csum += command+size;
+	int i;
+	for(i=0; i<strlen(message); i++){
+		*(write_buffer+i+3)= *(message+i);    /* 4°-32° Byte Payload */
+		csum += *(message+i);                 /* Checksum processing (no carry)  */
+	}
+	printf("%x\n",csum);
+	if(csum>>8) csum++;                     /* Checksum carry added if present */
+	printf("Calcolo checksum (carry): %x\n",(char)csum);
+	*(write_buffer+1)= (char)csum;          /* Checksum stored in the packet   */
+
 	int  bytes_written  = 0;  	/* Value for storing the number of bytes written to the port */
-
-	bytes_written = write(fd,write_buffer, sizeof(write_buffer));  //   /* use write() to send data to port     */
+	bytes_written = write(fd,write_buffer, MAX_BUF);  //   /* use write() to send data to port     */
 						           /* "fd"                   - file descriptor pointing to the opened serial port */
 									     /*	"write_buffer"         - address of the buffer containing data	            */
-									     /* "sizeof(write_buffer)" - No of bytes to write                               */
+									     /* "MAX_BUF" - No of bytes to write                               */
 	printf("\n  %s written to ttyACM0",write_buffer);
 	printf("\n  %d Bytes written to ttyACM0", bytes_written);
 	printf("\n +----------------------------------+\n\n");
