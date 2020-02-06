@@ -28,7 +28,7 @@ void main(void){
 
 /*------------------------------- Opening the Serial Port -------------------------------*/
 
-  fd = open("/dev/ttyACM0",O_RDWR | O_NOCTTY | O_NDELAY); //
+  fd = open("/dev/ttyACM0",O_RDWR | O_NOCTTY | O_NDELAY);
       /* /dev/ttyACM0 is the virtual file for the Arduino Board   */
 			/* O_RDWR Read/Write access to serial port           */
 			/* O_NOCTTY - No terminal will control the process   */
@@ -81,7 +81,7 @@ void main(void){
 	printf("  size: %x\n",size);
 	char sizeControl= 0;
 
-	/* size bits only checksum added to size field(only 5 bits needed) with bit stealing */
+	/* size-bits-only-checksum added to size field(only 5 bits needed) with bit stealing */
 	char temp= size;
 	int k;
 	for(k=0; k<5; k++){
@@ -93,7 +93,7 @@ void main(void){
 	size |= sizeControl;
 
 	char checksum= 0;
-	char message[6]= {0};
+	char message[6]= "prova.";
 
 	/* Assembling the packet */
 	*(write_buffer+0)= command;             /* 1° Byte Command     */

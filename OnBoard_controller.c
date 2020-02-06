@@ -1,181 +1,108 @@
-#include <util/delay.h>
-#include <stdio.h>
-#include <stdint.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/sleep.h>
 
-/*--------------------------------BIT MACROS-------------------------------------------------*/
-#define bit_get(p,m) ((p) & (m))
-#define bit_set(p,m) ((p) |= (m))
-#define bit_clear(p,m) ((p) &= ~(m))
-#define bit_flip(p,m) ((p) ^= (m))
-#define bit_write(c,p,m) (c ? bit_set(p,m) : bit_clear(p,m))
-#define BIT(x) (0x01 << (x))
-#define ZERO 0x00
-/*--------------------------------------------------------------------------------------------*/
+#define USART_BAUDRATE 19200
+#define UBRR_VALUE (F_CPU/16/USART_BAUDRATE-1)
+#define BUF_SIZE 32
 
-/*------------------------Blocking serial ops-------------------------------------------------*/
-#define BAUD 19200
-#define MYUBRR (F_CPU/16/BAUD-1)
+/*-----------------------Definition of packet structure & operations---------------------------*/
+typedef struct{
+  uint8_t buffer[BUF_SIZE];   /* Payload buffer */
+  uint8_t index;              /* index to navigate buffer, points to the next empty location */
+}Packet;
 
-void UART_init(void){
-  // Set baud rate
-  UBRR0H = (uint8_t)(MYUBRR>>8);
-  UBRR0L = (uint8_t) MYUBRR;
+/* Packet declaration */
+Packet pck;
 
-  UCSR0C = BIT(UCSZ01) | BIT(UCSZ00);               /* 8-bit data */
-  UCSR0B = BIT(RXEN0) | BIT(TXEN0) | BIT(RXCIE0);   /* Enable RX and TX */
+volatile uint8_t packetChunk= 0;       /* To keep track of bytes received (current packet)  */
+volatile uint8_t nextPacket= 0;        /* Sequence number of the next packet to be received */
 
+
+/* Packet initialization(erasing) */
+void PacketInit(Packet *pck)
+{
+  pck->index=0;    /* starting empty buffer location */
 }
 
-void UART_putChar(uint8_t c){
-  // wait for transmission completed, looping on status bit
-  while ( !(UCSR0A & BIT(UDRE0)) );
-
-  // Start transmission
-  UDR0 = c;
+/* write to buffer routine */
+uint8_t PacketWrite(Packet *pck, uint8_t u8data)
+{
+  if (pck->index<BUF_SIZE)
+  {
+    pck->buffer[pck->index] = u8data;
+    pck->index++;
+    return 0;
+  }
+  else return 1;
 }
 
-uint8_t UART_getChar(void){
-  // Wait for incoming data, looping on status bit
-  while ( !(UCSR0A & BIT(RXC0)) );
-
-  // Return the data
-  return UDR0;
-
+/* read from buffer routine */
+uint8_t PacketRead(Packet *pck, volatile uint8_t *u8data)
+{
+  if(pck->index<BUF_SIZE)
+  {
+    *u8data=pck->buffer[pck->index];
+    pck->index++;
+    return 0;
+  }
+  else return 1;
 }
 
-// reads a string until the first newline or 0
-// returns the size read
-uint8_t UART_getString(uint8_t* buf){
-  uint8_t* b0=buf; //beginning of buffer
-  while(1){
-    uint8_t c=UART_getChar();
-    *buf=c;
-    ++buf;
-    // reading a 0 terminates the string
-    if (c==0)
-      return buf-b0;
-    // reading a \n  or a \r return results
-    // in forcedly terminating the string
-    if(c=='\n'||c=='\r'){
-      *buf=0;
-      ++buf;
-      return buf-b0;
-    }
+/*----------------------------Interrupt driven USART0 routines---------------------------------*/
+void USART0Init(void)
+{
+  /* Set baud rate */
+  UBRR0H = (uint8_t)(UBRR_VALUE>>8);
+  UBRR0L = (uint8_t)UBRR_VALUE;
+  /* Set frame format to 8 data bits, no parity, 1 stop bit */
+  UCSR0C |= (1<<UCSZ01)|(1<<UCSZ00);
+  /* Enable reception and RC complete interrupt */
+  UCSR0B |= (1<<RXEN0)|(1<<RXCIE0);
+}
+
+/* RX Complete interrupt service routine */
+ISR(USART0_RX_vect)
+{
+  uint8_t u8temp;
+  u8temp=UDR0;
+  if ((PacketWrite(&pck, u8temp)==1)||(pck.index==BUF_SIZE))    /* check if packet is complete(index=32) */
+  {
+    /* when reception is complete index is set back to zero to start trasmission */
+    PacketInit(&pck);
+    /* disable reception and RX Complete interrupt */
+    UCSR0B &= ~((1<<RXEN0)|(1<<RXCIE0));
+    /* enable transmission and UDR0 empty interrupt */
+    UCSR0B |= (1<<TXEN0)|(1<<UDRIE0);
   }
 }
 
-void UART_putString(uint8_t* buf){
-  while(*buf){
-    UART_putChar(*buf);
-    ++buf;
+/* UDR0 Empty interrupt service routine */
+ISR(USART0_UDRE_vect)
+{
+  if (PacketRead(&pck, &UDR0)==1)
+  {
+    /* when trasmission is complete index is set back to zero (buffer seen as empty) */
+    PacketInit(&pck);
+    /* disable transmission and UDR0 empty interrupt */
+    UCSR0B &= ~((1<<TXEN0)|(1<<UDRIE0));
+    /* enable reception and RC complete interrupt */
+    UCSR0B |= (1<<RXEN0)|(1<<RXCIE0);
   }
 }
-/*--------------------------------------------------------------------------------------------*/
-
-/*---------------Interrupt driven check for a new device (pc) connected: Timer1 used----------*/
-volatile uint8_t pc_connected_check=0;
-
-ISR(TIMER1_COMPA_vect) {
-  pc_connected_check= 1;
-}
-/*--------------------------------------------------------------------------------------------*/
-
-uint8_t check_auth(uint8_t* buf){
-  uint8_t* code= (uint8_t*)"6codice";
-  uint8_t sizeofCode= *code++;
-  uint8_t sizeofBuf= *buf++;
-
-  UART_putChar(sizeofBuf);
-  UART_putString((uint8_t*)" - ");
-  UART_putChar(sizeofCode);
-  if(sizeofBuf != sizeofCode) return 0;
-
-  int i;
-  for(i=0; i<6;i++){     //BUG: se al posto di 6 metto sizeofCode (dovrebbe essere uguale a 6) fà 7 cicli
-    UART_putChar(i);
-    if(*(buf+i)!= *(code+i)){
-      UART_putChar(*(buf+i));
-      UART_putString((uint8_t*)" - ");
-      UART_putChar(*(code+i));
-      UART_putString((uint8_t*)"\n");
-      return 0;
-    }
-  }
-  return 1;
-}
-
-#define MAX_BUF 256
-
-int main(void){
-  UART_init();
-  const int timer_duration_ms=2000;
+/*---------------------------------------------------------------------------------------------*/
 
 
-  // configure timer: Prescaler=1024, Interrupt_delay= 2s. Interrupt checks if any PC was connected (incoming data)
-  TCCR1A = 0;
-  TCCR1B = BIT(WGM12) | BIT(CS10) | BIT(CS12);
-  uint16_t ocrval= (uint16_t)(15.62*timer_duration_ms);
-  OCR1A = ocrval;
+int main (void)
+{
+  PacketInit(&pck);   /* Packet initialization */
+  set_sleep_mode(SLEEP_MODE_IDLE);
+  USART0Init();       /* USART0 initialization */
+  sei();              /* Enable global interrupts */
+  while(1)
+  {
+    sleep_mode();  /* Put the device to sleep */
 
-  cli();
-  TIMSK1 |= BIT(OCIE1A);  // enable the timer interrupt
-  sei();
-
-  uint8_t buf[MAX_BUF];   // Buffer to store incoming data
-  uint8_t commands_enable= 0;
-  while(1){
-    if(pc_connected_check){
-      UART_putString((uint8_t*)"Checking if pc is connected\n");
-
-      cli();
-//      TIMSK1 &= ~(1 << OCIE1A);   // disable timer interrupt
-//      sei();
-
-      UART_getString(buf);
-      UART_putString((uint8_t*)"Data received: ");
-      UART_putString(buf);
-
-      UART_putString((uint8_t*)"Checking app authorization\n");
-      if(check_auth(buf)){
-        UART_putString((uint8_t*)"Code accepted\n");
-        commands_enable=1;
-      }
-      else {
-        UART_putString((uint8_t*)"Invalid code received\n");
-      }
-
-      pc_connected_check=0;
-//      cli();
-//      TIMSK1 |= BIT(OCIE1A);  // enable the timer interrupt
-      sei();
-    }
-
-    if(commands_enable){
-      UART_putString((uint8_t*)"Waiting for commands\n");
-      // doing stuff...
-      commands_enable= 0;
-    }
-
+    //if(packetComplete) ...
   }
 }
-
-
-
-
-
-/*
-TO DO:
-1- Protocollo Handshake (manca hello inviato da Board a PC)
-2- Binary + checksum com
-3- Non blocking serial operations
-
-*- Device commands
-
-DONE:
-- Timer to check if PC is connected
-- Blocking serial operations using UART FUNCTIONS
--
-
-*/

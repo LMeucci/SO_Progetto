@@ -40,8 +40,8 @@ PC invia un comando e la scheda risponde in modo appropriato (ack di ricezione e
 Design choice: un solo Sender (PC) alla volta può connettersi sulla Porta Seriale 0 della scheda per comunicare.
 Non sarà necessario verificare da quale fonte provengono i pacchetti.
 
-Protocollo: invio di pacchetti a dimensione fissa da 32Byte.
-1B Command(6bit cmd + 2bit packet number) + 1B checksum + 1B size(5bit size + 3bit minichecksum) + 0-29B payload
+Protocollo: invio di pacchetti a dimensione fissa da 32 Byte.
+1B Command(6bit cmd + 2bit packet number) + 1B checksum + 1B size(5bit size + 3bit sizecksum) + 29B payload (padding)
 Checksum sull'intero pacchetto o solo sul comando (se il comando non necessita della payload)
 
 Comandi: ogni comanda è codificato usando 6 bit (MSB) cui vanno aggiunti 2 bit di pacchetto in coda (lsb)
