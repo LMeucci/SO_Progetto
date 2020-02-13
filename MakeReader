@@ -1,13 +1,11 @@
 CC= gcc
-#override mi permette di definire macro per l'applicazione da riga di comando
-#es: make -f MakeWriter CFLAGS=-DDEBUG
-override CFLAGS := -g -Wall -O2 $(CFLAGS)
+CFLAGS= -g -Wall -O2
 #$(wildcard *.h) funzione che prende tutti i file .h nella directory corrente
 HEADERS:= $(wildcard *.h)
-SRC:= OnPC_client.c
+SRC:= OnPC_reader.c
 OBJ:= $(SRC:%.c=%.o)
 BINS:= $(SRC:%.c=%)
-TARGET= OnPC_client
+TARGET= OnPC_reader
 
 .PHONY: all clean install execute
 
