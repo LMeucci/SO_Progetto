@@ -62,6 +62,7 @@ uint8_t PckCheck(Packet *pck)
   /* Check sequence number */
   //uint8_t seqNum= (pck->buffer[0]) & SEQNUM_MASK;
   //if(seqNum != nextPacket) return 0;
+  
   /* Check control bits of size field */
   uint8_t sizeCtl= (pck->buffer[2]) & SIZECTL_MASK;
   uint8_t sizeControl= 0;
