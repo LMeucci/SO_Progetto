@@ -8,8 +8,20 @@
 
 #define MAX_WRITE 32
 #define MAX_READ 2
-#define MAX_PAYLOAD 29
-#define TO_DECIMAL_MASK 0x30
+#define MAX_PAYLOAD 30   /* 29+1 for fgets terminating char */
+#define INPUT_FAIL 0x20
+#define TO_INT_MASK 0x30
+#define TEMP_SENSOR 0x53
+#define LED 0x4C
+
+#define CMD_START 0x01
+#define CMD_QUERY 0x02
+#define CMD_ASSIGN 0x03
+#define CMD_READINGS 0x04
+#define CMD_SIREN_SETUP 0x05
+#define CMD_TEMP_SETUP 0x06
+
+#define CMD_ASSIGN_SIZE 0x02
 
 int SetSerialSettings(int fd, int speed, int parity)
 {
@@ -52,7 +64,7 @@ int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* mes
 
 	unsigned char sizeCopy= size;   /* for printing purposes */
 	#ifdef DEBUG
-		printf("\n  HEX: %x\n",command);
+		printf("\n  Command(debug): %x\n",command);
 		printf("  size: %x\n",size);
 	#endif
 
@@ -117,38 +129,183 @@ int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* mes
 			printf("%x ",write_buffer[h]);
 
 		printf("] written to ttyACM0\n");
-		printf("\n  %d Bytes written to ttyACM0\n", bytes_written);
+		printf("\n  %d Bytes written to ttyACM0\n\n", bytes_written);
 	#endif
 
 	if(bytes_written <= 0) return -1;
 	else return 0;
 }
 
-void printMenu(void)
+void printMenu(char *controller)
 {
+	printf("\n +----------------------------------------------------------------------------------------------+\n\n");
+	printf("    Connected to: %s\n\n",controller);
 	printf("    You can perform the following actions(select one):\n\n");
+
 	printf("    1- Query available ports\n");
-	printf("    2- Assign a new device to an available port\n");
-	printf("    3- Perform a special action\n");
-	printf("    4- Restart the configuration process(all data will be lost)\n");
-	printf("    5- Exit the application\n\n");
+	printf("    2- Assign a new device(temp_sensor or led) to an available port\n");
+	printf("    3- Setup an installed led\n");
+	printf("    4- Setup an installed temp sensor\n");
+	printf("    5- Get readings from installed temp sensors\n");
+
+	printf("    9- Restart the configuration process(all data will be lost)\n");
+	printf("    0- Exit the application\n\n");
+}
+
+void filterInput(char* input, int filter)
+{
+	fgets(input,filter+1,stdin);
+	if(!strchr(input, '\n'))         // if string entered is longer than 1 char, input doesn't contain '\n'
+		while(fgetc(stdin)!='\n')      // discard until newline, empty stdin buffer
+	  	*input = INPUT_FAIL;         // inside the while a string with 2+ characters was passed
+}
+
+int queryChannels(int fd, char* controller) //non manda pacchetti, l'assegnazione è su variabili pc
+{
+	unsigned char command= CMD_QUERY;
+	unsigned char size= 0;
+	unsigned char *payload= {0};
+
+	if(PckSend(fd,command,size,payload) != 0)
+	{
+		printf("\n ERROR sending queryChannels() packet");
+		return -1;
+	}
+	return 0;
+}
+
+int assignToPort(int fd, unsigned char* ports)
+{
+	printf("    To which port are you connecting the device?\n\n");
+	char port[1];
+	do
+	{
+		printf("    Port chosen: ");
+		filterInput(port,sizeof(port));
+	}while(((*port)-TO_INT_MASK >7) || (*port)-TO_INT_MASK <0);
+	printf("\n");
+	/* if port chosen is already in use wait for confirmation new device was connected */
+	if ((1<<((*port)-TO_INT_MASK)) & *ports) {
+		printf("    The port chosen is already occupied. Be sure the new device is connected before going on\n");
+		printf("    When you are ready press y|Y.\n\n");
+		char ack[1];
+		do
+		{
+			printf("    Ready? ");
+			filterInput(ack,sizeof(ack));
+		}while(*ack != 0x59 && *ack != 0x79);  /* *ack must be y or Y */
+		printf("\n");
+	}
+
+	printf("    Which kind of device was connected?\n\n");
+	printf("    1- Temperature sensor");
+	printf("    2- LED\n\n");
+	char dev[1];
+	do
+	{
+		printf("    Device chosen: ");
+		filterInput(dev,sizeof(dev));
+	}while(((*dev)-TO_INT_MASK >2) || (*dev)-TO_INT_MASK <1);
+	printf("\n");
+
+	unsigned char command= CMD_ASSIGN;
+	unsigned char size= CMD_ASSIGN_SIZE;
+	unsigned char payload[CMD_ASSIGN_SIZE]= {0};
+	if((*dev-TO_INT_MASK) == 1)
+	{
+		/* send sensor packet */
+		*payload= TEMP_SENSOR;
+		*(payload+1)= *port;
+		if(PckSend(fd,command,size,payload) != 0)
+		{
+			printf("\n ERROR sending assignToPort() packet");
+			return -1;
+		}
+	}
+	else
+	{
+		/* send LED packet */
+		*payload= LED;
+		*(payload+1)= *port;
+		if(PckSend(fd,command,size,payload) != 0)
+		{
+			printf("\n ERROR sending assignToPort() packet");
+			return -1;
+		}
+	}
+	#ifdef DEBUG
+		printf(" Ports before new assign(debug): %x\n",*ports);
+	#endif
+	*ports= (*ports | 1<<(*port-TO_INT_MASK));
+	#ifdef DEBUG
+		printf(" Ports after new assign(debug): %x\n",*ports);
+	#endif
+	return 0;
+}
+
+int start(int fd, char* controller)
+{
+	printf("    Welcome to the configuration process, you need to choose a name for the controller first.\n");
+	printf("    Name length must be up to 29 characters and cannot be void.\n\n");
+
+	do
+	{
+		printf("    Controller Name: ");
+		fgets(controller,MAX_PAYLOAD,stdin);
+		#ifdef DEBUG
+			printf("    Controller(debug): %s\n",controller);
+			printf("    Size fgets(debug): %d\n\n",(int)strlen(controller));
+		#endif
+	}while(strlen(controller)<=1);
+
+	unsigned char command= CMD_START;
+	unsigned char size= strlen(controller)-1;
+	unsigned char *payload= (unsigned char*)controller;
+
+	if(PckSend(fd,command,size,payload) != 0)
+	{
+		printf("\n ERROR sending start() packet");
+		return -1;
+	}
+	return 0;
+}
+
+void save(char* controller) //da implementare
+{
+
 }
 
 /* Perform selected action */
-int selectAction(char action)
+int selectAction(int fd, char* controller, unsigned char* ports, char action)
 {
 	switch(action)
 	{
 		case 1:
+			if(queryChannels(fd,controller) != 0)
+			{
+				printf("\n ERROR encountered calling queryChannels()");
+			}
 			return 0;
 		case 2:
+			if(assignToPort(fd,ports) != 0)
+			{
+				printf("\n ERROR encountered calling assignToPort()");
+			}
 			return 0;
 		case 3:
 			return 0;
 		case 4:
-			//start();
 			return 0;
 		case 5:
+			return 0;
+		case 9:
+			if(start(fd,controller) != 0)
+			{
+				printf("\n ERROR encountered calling start()");
+			}
+			return 0;
+		case 0:
+			save(controller);
 			exit(0);
 
 		default:
@@ -157,6 +314,10 @@ int selectAction(char action)
 	}
 }
 
+void load(char* controller) //da implementare controller lo uso per caricarci il nome salvato sul file
+{
+
+}
 
 int main(void)
 {
@@ -190,44 +351,28 @@ int main(void)
 		exit(1);
 	}
 
-	printf("    Welcome to the configuration process, you need to choose a name for the controller first.\n");
-	printf("    Name length must be up to 28 characters.\n\n");
-	printf("    Name: ");
-	char name[MAX_PAYLOAD];
-	fgets(name,MAX_PAYLOAD,stdin);
-	#ifdef DEBUG
-		printf("    Name(debug): %s\n",name);
-		printf("    Size: %d\n\n",(int)strlen(name));
-	#endif
-
-	unsigned char command= 'Z';
-	unsigned char size= strlen(name)-1;
-	unsigned char *message= (unsigned char*)name;
-
-	if(PckSend(fd,command,size,message) != 0)
-		printf("\n ERROR write failed");
-
-/*
+	char controller[MAX_PAYLOAD];     /* store controller name */
+	unsigned char ports= 0;           /* keeps track of ports  */
+	//unsigned char devices= 0;
+	if(start(fd,controller) != 0)
+	{
+		printf("\n ERROR encountered calling start()");
+	}
 	while(1)
 	{
-		printMenu();
-
-		while(1){
-			char sel[2];                    // 2 char, fgets append \0 at the end
+		printMenu(controller);
+		char sel[1];
+		do
+		{
 			printf("    Entered: ");
-			fgets(sel,sizeof(sel),stdin);
-			if(!strchr(sel, '\n'))          // if input is longer than 1 char
-	    	while(fgetc(stdin)!='\n');    // discard until newline
-			printf("\n");
-			if(selectAction((*sel)-TO_DECIMAL_MASK) == 0)
-				break;
-		}
+			filterInput(sel,sizeof(sel));
+		}while(selectAction(fd,controller,&ports,(*sel)-TO_INT_MASK) != 0);
+		printf("\n");
 	}
-*/
 
 	/*-----------------------------Receiving response-------------------------------------------------------*/
 
-	// NOT WORKING WITHOUT OPENING CUTECOM FIRST
+	/*
 	printf("  Receiving data... \n");
 
 	char read_buffer[MAX_READ];   // Buffer to store the data received
@@ -241,9 +386,9 @@ int main(void)
 
 	for(j=0;j<bytes_read;j++)	 // printing only the received characters
 		printf("%c",read_buffer[j]);
-
+	*/
 
 	printf("\n +----------------------------------------------------------------------------------------------+\n\n");
-	close(fd);/* Close the Serial port */
+	close(fd);   /* Close the Serial port */
 
 }

@@ -67,4 +67,13 @@ La scheda risponde con un ack se il check è andato a buon fine ed il pacchetto 
 Comandare la board:
 1) install()
 2*) setChannelName() e/o queryChannels()
-3*) funzioni custom dei device per impostarli (Es: set minTemp() per sensore di temperatura) 
+3*) funzioni custom dei device per impostarli (Es: set minTemp() per sensore di temperatura)
+
+
+Program behavior:
+Se si vuole assegnare un dispositivo ad una porta già occupata si può fare, bisogna staccare il vecchio dispositivo
+e collegare il nuovo. All'inizio dell'esecuzione del comando assignToPort() verrà chiesto di effettuare tale
+manovra prima di procedere(vale solo nel caso di porta già occupata).
+
+Idea:
+aggiungere macchina a stati per descrivere il comportamento del programma.
