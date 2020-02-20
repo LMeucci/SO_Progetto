@@ -3,25 +3,27 @@
 #include <stdlib.h>
 #include <fcntl.h>   /* File Control Definitions           */
 #include <termios.h> /* POSIX Terminal Control Definitions */
-#include <unistd.h>  /* UNIX Standard Definitions 	   */
+#include <unistd.h>  /* UNIX Standard Definitions 	       */
 #include <errno.h>   /* ERROR Number Definitions           */
 
 #define MAX_WRITE 32
 #define MAX_READ 2
-#define MAX_PAYLOAD 30   /* 29+1 for fgets terminating char */
+#define MAX_PAYLOAD 29
 #define INPUT_FAIL 0x20
 #define TO_INT_MASK 0x30
+#define MAX_DEVICES 8
+#define NO_DEV 0x4E
 #define TEMP_SENSOR 0x53
 #define LED 0x4C
 
 #define CMD_START 0x01
-#define CMD_QUERY 0x02
-#define CMD_ASSIGN 0x03
-#define CMD_READINGS 0x04
-#define CMD_SIREN_SETUP 0x05
-#define CMD_TEMP_SETUP 0x06
+#define CMD_ASSIGN 0x02
+#define CMD_READINGS 0x03
+#define CMD_LED_SETUP 0x04
+#define CMD_TEMP_SETUP 0x05
 
 #define CMD_ASSIGN_SIZE 0x02
+#define CMD_LED_SETUP_SIZE 0x02
 
 int SetSerialSettings(int fd, int speed, int parity)
 {
@@ -67,10 +69,6 @@ int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* mes
 		printf("\n  Command(debug): %x\n",command);
 		printf("  size: %x\n",size);
 	#endif
-
-	// disabled functionality
-	//char packetNumber= 0;
-	//command |= packetNumber;     /* first 2 command bits are used to store packet number (bit stealing) */
 
 	/*-----sizeControl(a size-field-only checksum) loaded in the last 3 bits of size (bit stealing)-------*/
 	char sizeControl= 0;
@@ -160,29 +158,28 @@ void filterInput(char* input, int filter)
 	  	*input = INPUT_FAIL;         // inside the while a string with 2+ characters was passed
 }
 
-int queryChannels(int fd, char* controller) //non manda pacchetti, l'assegnazione è su variabili pc
+void queryChannels(unsigned char* ports, char* devices)
 {
-	unsigned char command= CMD_QUERY;
-	unsigned char size= 0;
-	unsigned char *payload= {0};
-
-	if(PckSend(fd,command,size,payload) != 0)
-	{
-		printf("\n ERROR sending queryChannels() packet");
-		return -1;
-	}
-	return 0;
+	printf("\n\n    Port-Device assignments(S= sensor, L=led, N= not assigned):\n\n");
+	printf("    [");
+	int i;
+	for(i=0; i<MAX_DEVICES; i++)
+			printf(" Port[%d]-Dev[%c]",i,*(devices+i));
+	printf(" ]\n\n");
+	printf("    Ports not represented are not assigned.\n");
 }
 
-int assignToPort(int fd, unsigned char* ports)
+int assignToPort(int fd, unsigned char* ports, char* devices)
 {
-	printf("    To which port are you connecting the device?\n\n");
+	printf("    To which port are you connecting the device(0-7)?\n");
+	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
+	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n\n");
 	char port[1];
 	do
 	{
 		printf("    Port chosen: ");
 		filterInput(port,sizeof(port));
-	}while(((*port)-TO_INT_MASK >7) || (*port)-TO_INT_MASK <0);
+	}while(((*port)-TO_INT_MASK >7) || ((*port)-TO_INT_MASK <0));
 	printf("\n");
 	/* if port chosen is already in use wait for confirmation new device was connected */
 	if ((1<<((*port)-TO_INT_MASK)) & *ports) {
@@ -211,7 +208,7 @@ int assignToPort(int fd, unsigned char* ports)
 	unsigned char command= CMD_ASSIGN;
 	unsigned char size= CMD_ASSIGN_SIZE;
 	unsigned char payload[CMD_ASSIGN_SIZE]= {0};
-	if((*dev-TO_INT_MASK) == 1)
+	if((*dev)-TO_INT_MASK == 1)
 	{
 		/* send sensor packet */
 		*payload= TEMP_SENSOR;
@@ -234,12 +231,77 @@ int assignToPort(int fd, unsigned char* ports)
 		}
 	}
 	#ifdef DEBUG
-		printf(" Ports before new assign(debug): %x\n",*ports);
+		printf(" Ports before new assign(debug): %x\n",*ports); //bug assegnare a porta 1 cancella il dev in porta 0
+		printf(" Devices before(debug): [");
+		int i;
+		for(i=0; i<MAX_DEVICES; i++) printf(" %c",*(devices+i));
+		printf(" ]\n");
 	#endif
-	*ports= (*ports | 1<<(*port-TO_INT_MASK));
+	*ports= (*ports | (1<<((*port)-TO_INT_MASK)));
+	(*dev)--;
+	*(devices + ((*port)-TO_INT_MASK))= ((*dev)-TO_INT_MASK) ? LED : TEMP_SENSOR;
 	#ifdef DEBUG
 		printf(" Ports after new assign(debug): %x\n",*ports);
+		printf(" Devices after(debug): [");
+		int j;
+		for(j=0; j<MAX_DEVICES; j++) printf(" %c",*(devices+j));
+		printf(" ]\n");
 	#endif
+	return 0;
+}
+
+int setLED(int fd, unsigned char* ports, char* devices)
+{
+	printf("    Which LED do you want to setup? (select a port: 0-7)\n");
+	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
+	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n\n");
+	char port[1];
+	do
+	{
+		printf("    Port chosen: ");
+		filterInput(port,sizeof(port));
+	}while(((*port)-TO_INT_MASK >7) || ((*port)-TO_INT_MASK <0));
+	printf("\n");
+
+	/* Check if a device, which is a LED, has been assigned to the port, else an error is reported */
+	if( (((*ports) & (1<<((*port)-TO_INT_MASK))) == 0) || (*(devices + ((*port)-TO_INT_MASK))!= LED))
+	{
+		printf("\n No device or no LED is assigned to the port selected. ");
+		printf("Assign a LED to a port before attempting again\n\n");
+		return -1;
+	}
+
+
+	printf("    Choose a value to setup LED brightness level(0-255), using 3 digits(eg: 1=001):\n\n");
+	char brightness[3]={0};
+	do
+	{
+		printf("    Brightness level selected: ");
+		filterInput(brightness,sizeof(brightness));
+	}while(((*brightness) -TO_INT_MASK   >2) || ((*brightness)    -TO_INT_MASK   <0)
+   || ((*(brightness+1))-TO_INT_MASK   >9) || ((*(brightness+1))-TO_INT_MASK   <0)
+	 || ((*(brightness+2))-TO_INT_MASK   >9) || ((*(brightness+2))-TO_INT_MASK   <0)
+	 || (((*brightness)-TO_INT_MASK ==2) && ((*(brightness+1))-TO_INT_MASK >5))
+	 || (((*brightness)-TO_INT_MASK ==2) && ((*(brightness+1))-TO_INT_MASK ==5) && ((*(brightness+2))-TO_INT_MASK >5)));
+	printf("\n");
+
+	unsigned char command= CMD_LED_SETUP;
+	unsigned char size= CMD_LED_SETUP_SIZE;
+	unsigned char payload[CMD_LED_SETUP_SIZE]= {0};
+	*payload= *port;
+	*(payload+1)= ((*(brightness))  -TO_INT_MASK)*100
+						   +((*(brightness+1))-TO_INT_MASK)*10
+	           	 +((*(brightness+2))-TO_INT_MASK)*1;
+
+	#ifdef DEBUG
+		printf(" Brightness level(debug): %d\n\n",(int)(*(payload+1)));
+	#endif
+	if(PckSend(fd,command,size,payload) != 0)
+	{
+		printf("\n ERROR sending setLED() packet");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -251,7 +313,7 @@ int start(int fd, char* controller)
 	do
 	{
 		printf("    Controller Name: ");
-		fgets(controller,MAX_PAYLOAD,stdin);
+		fgets(controller,MAX_PAYLOAD+1,stdin);
 		#ifdef DEBUG
 			printf("    Controller(debug): %s\n",controller);
 			printf("    Size fgets(debug): %d\n\n",(int)strlen(controller));
@@ -276,23 +338,24 @@ void save(char* controller) //da implementare
 }
 
 /* Perform selected action */
-int selectAction(int fd, char* controller, unsigned char* ports, char action)
+int selectAction(int fd, char* controller, unsigned char* ports, char* devices, char action)
 {
 	switch(action)
 	{
 		case 1:
-			if(queryChannels(fd,controller) != 0)
-			{
-				printf("\n ERROR encountered calling queryChannels()");
-			}
+			queryChannels(ports,devices);
 			return 0;
 		case 2:
-			if(assignToPort(fd,ports) != 0)
+			if(assignToPort(fd,ports,devices) != 0)
 			{
 				printf("\n ERROR encountered calling assignToPort()");
 			}
 			return 0;
 		case 3:
+			if(setLED(fd,ports,devices) != 0)
+			{
+				printf("\n ERROR encountered calling setLED()");
+			}
 			return 0;
 		case 4:
 			return 0;
@@ -319,20 +382,23 @@ void load(char* controller) //da implementare controller lo uso per caricarci il
 
 }
 
+char controller[MAX_PAYLOAD];   /* store controller name */
+unsigned char ports= 0;         /* keeps track of ports, 1bit per port  */
+char devices[MAX_DEVICES]= {NO_DEV,NO_DEV,NO_DEV,NO_DEV,
+									          NO_DEV,NO_DEV,NO_DEV,NO_DEV}; /* keeps track of devices assigned to ports */
+
 int main(void)
 {
 	printf("\n +----------------------------------------------------------------------------------------------+");
 	printf("\n |                                 SmartHouse: Configuration                                    |");
 	printf("\n +----------------------------------------------------------------------------------------------+\n\n");
 
-	/*------------- Opening the Serial Port -----------------*/
+	/*---------------------- Opening the Serial Port ---------------------------*/
 	int fd;  /*File Descriptor*/
   fd = open("/dev/ttyACM0",O_RDWR | O_NOCTTY | O_SYNC );
       /* /dev/ttyACM0 is the virtual file for the Arduino Board   */
 			/* O_RDWR Read/Write access to serial port           */
 			/* O_NOCTTY - No terminal will control the process   */
-			/* O_NDELAY -Non Blocking Mode,Does not care about-  */
-			/* -the status of DCD line,Open() returns immediatly */
 	if(fd == -1)						/* Error Checking */
 	{
 		printf("\n ERROR opening ttyACM0  ");
@@ -342,18 +408,14 @@ int main(void)
 		#ifdef DEBUG
 			printf("\n  ttyACM0 Opened Successfully ");
 		#endif
-		//fcntl(fd, F_SETFL,0);  /* so read() works properly in non canonical mode */
 	}
-	/* Setting the Attributes of the serial port using termios structure */
 	if(SetSerialSettings(fd,B19200,0) != 0)
 	{
 		printf("\n ERROR during serial setup\n");
 		exit(1);
 	}
+	/*--------------------------------------------------------------------------*/
 
-	char controller[MAX_PAYLOAD];     /* store controller name */
-	unsigned char ports= 0;           /* keeps track of ports  */
-	//unsigned char devices= 0;
 	if(start(fd,controller) != 0)
 	{
 		printf("\n ERROR encountered calling start()");
@@ -366,7 +428,7 @@ int main(void)
 		{
 			printf("    Entered: ");
 			filterInput(sel,sizeof(sel));
-		}while(selectAction(fd,controller,&ports,(*sel)-TO_INT_MASK) != 0);
+		}while(selectAction(fd,controller,&ports,devices,(*sel)-TO_INT_MASK) != 0);
 		printf("\n");
 	}
 

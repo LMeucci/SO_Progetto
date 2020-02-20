@@ -77,3 +77,14 @@ manovra prima di procedere(vale solo nel caso di porta già occupata).
 
 Idea:
 aggiungere macchina a stati per descrivere il comportamento del programma.
+
+
+TO-DO:
+start invia HELLO & reduce packet max size
+        lato client (start: 8byte, setLED: 5byte(porta,value), setTemp: 6byte(porta,min,max), readings: 4byte(porta))
+        lato controller (start: ack, setLED: ack, setTemp: ack, readings: ack+payload(1byte))
+ack checking
+save
+load (legato ad un if a inizio programma e utilizzabile anche come funzionalità singola)
+implement last functions 4-5
+Arduino part
