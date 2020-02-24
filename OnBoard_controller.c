@@ -8,9 +8,20 @@
 
 #define MAX_READ 32
 #define MAX_WRITE 2
+
+#define PIN_2 0
+#define PIN_3 1
+#define PIN_5 2
+#define PIN_6 3
+#define PIN_7 4
+#define PIN_8 5
+#define PIN_46 6
+#define PIN_44 7
+
 #define SIZECTL_MASK 0x07
 #define TO_INT_MASK 0x30
-#define ZERO 255
+#define SWITCH_MASK1 0xff
+#define BUTTON_STEP 26
 
 #define CMD_START 0x01
 #define CMD_ASSIGN 0x02
@@ -34,9 +45,14 @@ Packet pck;
 /* Response packets */
 Packet rsp;
 
-const uint16_t timer_duration_ms= 500;
-uint8_t brightnessLED[8]={ZERO,ZERO,ZERO,ZERO,ZERO,ZERO,ZERO,ZERO};
-volatile uint8_t blinker= 0;
+/* variables used to handle pwm and timer5      ----> [NOT IN USE] <-----
+const uint16_t timer_duration_ms= 500;*/
+uint8_t brightnessLED[8]={0};
+//volatile uint8_t blinker= 0;
+
+
+/* pins used to handle switches */
+volatile uint8_t current_pins;
 
 /* Packets initialization(erasing) */
 void PckInit(Packet *pck)
@@ -74,11 +90,12 @@ void pwmInit(uint8_t pin, uint8_t brightness)
 {
   /*---------pin mapping:-------------
                          0=pin2, 1=pin3, 2=pin5,  3=pin6,
-                         4=pin7, 5=pin8, 6=pin11, 7=pin12*/
+                         4=pin7, 5=pin8, 6=pin46, 7=pin44*/
+  brightness= 255 -brightness; // need to invert user input because brightness=255 -> led off
   *(brightnessLED+(pin-TO_INT_MASK))= brightness;
   switch(pin-TO_INT_MASK)
   {
-    case 0:
+    case PIN_2:
       /* timer3, channel B (pin2) Fast PWM, non inverted, 8bit */
       TCCR3A |= (1<<COM3B1) | (1<<COM3B0) | (1<<WGM30);
       TCCR3B |= (1<<WGM32) | (1<<CS30);  // no prescaler
@@ -86,7 +103,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       OCR3BH= 0;
       OCR3BL= brightness;
       break;
-    case 1:
+    case PIN_3:
       /* timer3, channel C (pin3) Fast PWM, non inverted, 8bit */
       TCCR3A |= (1<<COM3C1) | (1<<COM3C0) | (1<<WGM30);
       TCCR3B |= (1<<WGM32) | (1<<CS30);  // no prescaler
@@ -94,7 +111,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       OCR3CH= 0;
       OCR3CL= brightness;
       break;
-    case 2:
+    case PIN_5:
       /* timer3, channel A (pin5) Fast PWM, non inverted, 8bit */
       TCCR3A |= (1<<COM3A1) | (1<<COM3A0) | (1<<WGM30);
       TCCR3B |= (1<<WGM32) | (1<<CS30);  // no prescaler
@@ -102,7 +119,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       OCR3AH= 0;
       OCR3AL= brightness;
       break;
-    case 3:
+    case PIN_6:
       /* timer4, channel A (pin6)  */
       TCCR4A |= (1<<COM4A1) | (1<<COM4A0) | (1<<WGM40);
       TCCR4B |= (1<<WGM42) | (1<<CS40);  // no prescaler
@@ -110,7 +127,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       OCR4AH= 0;
       OCR4AL= brightness;
       break;
-    case 4:
+    case PIN_7:
       /* timer4, channel B (pin7)  */
       TCCR4A |= (1<<COM4B1) | (1<<COM4B0) | (1<<WGM40);
       TCCR4B |= (1<<WGM42) | (1<<CS40);  // no prescaler
@@ -118,7 +135,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       OCR4BH= 0;
       OCR4BL= brightness;
       break;
-    case 5:
+    case PIN_8:
       /* timer4, channel C (pin8)  */
       TCCR4A |= (1<<COM4C1) | (1<<COM4C0) | (1<<WGM40);
       TCCR4B |= (1<<WGM42) | (1<<CS40);  // no prescaler
@@ -126,21 +143,21 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       OCR4CH= 0;
       OCR4CL= brightness;
       break;
-    case 6:
-      /* timer1, channel A (pin11), Fast PWM, non inverted, 8bit */
-      TCCR1A |= (1<<COM1A1) | (1<<COM1A0) | (1<<WGM10);
-      TCCR1B |= (1<<WGM12) | (1<<CS10);  // no prescaler
-      DDRB |= (1<<PB5);                  // output pin set
-      OCR1AH= 0;
-      OCR1AL= brightness;
+    case PIN_46:
+      /* timer5, channel A (pin46), Fast PWM, non inverted, 8bit */
+      TCCR5A |= (1<<COM5A1) | (1<<COM5A0) | (1<<WGM50);
+      TCCR5B |= (1<<WGM52) | (1<<CS50);  // no prescaler
+      DDRL |= (1<<PL3);                  // output pin set
+      OCR5AH= 0;
+      OCR5AL= brightness;
       break;
-    case 7:
-      /* timer1, channel B (pin12), Fast PWM, non inverted, 8bit */             // NOW pin13 DEBUGGING
-      TCCR1A |= (1<<COM1C1) | (1<<COM1C0) | (1<<WGM10);
-      TCCR1B |= (1<<WGM12) | (1<<CS10);  // no prescaler
-      DDRB |= (1<<PB7);                  // output pin set
-      OCR1CH= 0;
-      OCR1CL= brightness;
+    case PIN_44:
+      /* timer5, channel C (pin44), Fast PWM, non inverted, 8bit */
+      TCCR5A |= (1<<COM5C1) | (1<<COM5C0) | (1<<WGM50);
+      TCCR5B |= (1<<WGM52) | (1<<CS50);  // no prescaler
+      DDRL |= (1<<PL5);                  // output pin set
+      OCR5CH= 0;
+      OCR5CL= brightness;
       break;
 
     default:
@@ -283,9 +300,10 @@ ISR(USART0_UDRE_vect)
 }
 /*---------------------------------------------------------------------------------------------*/
 
+/*---------------------------------------> [NOT IN USE]
 ISR(TIMER5_COMPA_vect)
 {
-  if(blinker == 0) /* all LED off */
+  if(blinker == 0) // all LED off
   {
     OCR3BL= ZERO;
     OCR3CL= ZERO;
@@ -293,11 +311,11 @@ ISR(TIMER5_COMPA_vect)
     OCR4AL= ZERO;
     OCR4BL= ZERO;
     OCR4CL= ZERO;
-    OCR1AL= ZERO;
-    OCR1CL= ZERO;                                                               // pin13 DEBUGGING
+    OCR5AL= ZERO;
+    OCR5CL= ZERO;
     blinker= 1;
   }
-  else            /* all LED on */
+  else            // all LED on
   {
     OCR3BL= *(brightnessLED);
     OCR3CL= *(brightnessLED+1);
@@ -305,22 +323,162 @@ ISR(TIMER5_COMPA_vect)
     OCR4AL= *(brightnessLED+3);
     OCR4BL= *(brightnessLED+4);
     OCR4CL= *(brightnessLED+5);
-    OCR1AL= *(brightnessLED+6);
-    OCR1CL= *(brightnessLED+7);                                                 // pin13 DEBUGGING
+    OCR5AL= *(brightnessLED+6);
+    OCR5CL= *(brightnessLED+7);
     blinker= 0;
   }
 }
+*/
 
+ISR(PCINT0_vect)
+{
+  current_pins= (PINB & SWITCH_MASK1);
+
+  /* 255= led off(duty cycle=0%), 0= led on max brightness(duty cycle=100%) */
+  /*---------------------------pin7 buttons---------------------------------*/
+  // increase button
+  if( (current_pins&(1<<PB4)) == 0 )
+  {
+    if((*(brightnessLED+PIN_7)) > BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_7)-= BUTTON_STEP;
+      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_7)) >0)
+    {
+      *(brightnessLED+PIN_7)= 0;
+      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
+    }
+  }
+  // decrease button
+  if( (current_pins&(1<<PB5)) == 0 )
+  {
+    if((*(brightnessLED+PIN_7)) < 255-BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_7)+= BUTTON_STEP;
+      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_7)) <255)
+    {
+      *(brightnessLED+PIN_7)= 255;
+      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
+    }
+  }
+
+  /*---------------------------pin8 buttons---------------------------------*/
+  // increase button
+  if( (current_pins&(1<<PB6)) == 0 )
+  {
+    if((*(brightnessLED+PIN_8)) > BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_8)-= BUTTON_STEP;
+      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_8)) >0)
+    {
+      *(brightnessLED+PIN_8)= 0;
+      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
+    }
+  }
+  // decrease button
+  if( (current_pins&(1<<PB7)) == 0 )
+  {
+    if((*(brightnessLED+PIN_8)) < 255-BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_8)+= BUTTON_STEP;
+      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_8)) <255)
+    {
+      *(brightnessLED+PIN_8)= 255;
+      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
+    }
+  }
+
+  /*----------------------pin46 buttons----------------------------------*/
+  // increase button
+
+  if( (current_pins&(1<<PB0)) == 0 )
+  {
+    if((*(brightnessLED+PIN_46)) > BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_46)-= BUTTON_STEP;
+      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_46)) >0)
+    {
+      *(brightnessLED+PIN_46)= 0;
+      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
+    }
+  }
+  //decrease button
+  if( (current_pins&(1<<PB1)) == 0 )
+  {
+    if((*(brightnessLED+PIN_46)) < 255-BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_46)+= BUTTON_STEP;
+      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_46)) <255)
+    {
+      *(brightnessLED+PIN_46)= 255;
+      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
+    }
+  }
+
+  /*---------------------------pin44 buttons---------------------------------*/
+  // increase button
+  if( (current_pins&(1<<PB2)) == 0 )
+  {
+    if((*(brightnessLED+PIN_44)) > BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_44)-= BUTTON_STEP;
+      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_44)) >0)
+    {
+      *(brightnessLED+PIN_44)= 0;
+      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
+    }
+  }
+  // decrease button
+  if( (current_pins&(1<<PB3)) == 0 )
+  {
+    if((*(brightnessLED+PIN_44)) < 255-BUTTON_STEP)
+    {
+      *(brightnessLED+PIN_44)+= BUTTON_STEP;
+      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
+    }
+    else if((*(brightnessLED+PIN_44)) <255)
+    {
+      *(brightnessLED+PIN_44)= 255;
+      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
+    }
+  }
+
+  _delay_ms(200);                              // help but do not solve bounce contact effect
+}
+
+void switchesInit(void)
+{
+  DDRB &= ~SWITCH_MASK1;      // set SWITCH_MASK1 pins as input
+  PORTB |= SWITCH_MASK1;      // enable pull up resistors
+  PCICR |= (1 << PCIE0);        // PCINT7:0 pins can cause an interupt
+  PCMSK0 |= SWITCH_MASK1;     // enabled only pins 0-4
+}
+
+/*----------------------------------------------> [NOT IN USE]
 void timerInit(void)
 {
-  /* Timer5, CTC, prescaler=1024 */
+  // Timer5, CTC, prescaler=1024
   TCCR5A = 0;
   TCCR5B = (1 << WGM52) | (1 << CS52) | (1 << CS50);
-  /* 1 ms will correspond do 15.62 counts */
+  // 1 ms will correspond do 15.62 counts
   uint16_t ocrval=(uint16_t)(15.62*timer_duration_ms);
   OCR5A = ocrval;
   TIMSK5 |= (1 << OCIE5A);  // enable the timer interrupt
 }
+*/
 
 int main (void)
 {
@@ -328,9 +486,9 @@ int main (void)
   RspInit(&rsp);  /* Response packet init */
   set_sleep_mode(SLEEP_MODE_IDLE);
 
-  cli();
   USART0Init();       /* USART0 initialization */
-  timerInit();
+  //timerInit();   ---> [NOT IN USE] <---
+  switchesInit();
   sei();              /* Enable global interrupts */
   while(1)
   {

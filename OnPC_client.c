@@ -160,20 +160,22 @@ void filterInput(char* input, int filter)
 
 void queryChannels(unsigned char* ports, char* devices)
 {
-	printf("\n\n    Port-Device assignments(S= sensor, L=led, N= not assigned):\n\n");
+	printf("\n\n    Port-Device assignments(S= sensor, L=led, N= not assigned):\n");
+	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
+	printf("    4= pin7, 5= pin8, 6= pin46, 7= pin44\n\n");
 	printf("    [");
 	int i;
 	for(i=0; i<MAX_DEVICES; i++)
 			printf(" Port[%d]-Dev[%c]",i,*(devices+i));
 	printf(" ]\n\n");
-	printf("    Ports not represented are not assigned.\n");
 }
 
 int assignToPort(int fd, unsigned char* ports, char* devices)
 {
 	printf("    To which port are you connecting the device(0-7)?\n");
 	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
-	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n\n");
+	printf("    4= pin7, 5= pin8, 6= pin46, 7= pin44\n");
+	printf("    Ports 4-7 have advanced LED features\n\n");
 	char port[1];
 	do
 	{
@@ -183,7 +185,7 @@ int assignToPort(int fd, unsigned char* ports, char* devices)
 	printf("\n");
 	/* if port chosen is already in use wait for confirmation new device was connected */
 	if ((1<<((*port)-TO_INT_MASK)) & *ports) {
-		printf("    The port chosen is already occupied. Be sure the new device is connected before going on\n");
+		printf("    The port chosen is already occupied. Be sure to disconnect the old device before going on\n");
 		printf("    When you are ready press y|Y.\n\n");
 		char ack[1];
 		do
@@ -194,7 +196,7 @@ int assignToPort(int fd, unsigned char* ports, char* devices)
 		printf("\n");
 	}
 
-	printf("    Which kind of device was connected?\n\n");
+	printf("    Which kind of device do you want to connect?\n\n");
 	printf("    1- Temperature sensor");
 	printf("    2- LED\n\n");
 	char dev[1];
@@ -247,6 +249,7 @@ int assignToPort(int fd, unsigned char* ports, char* devices)
 		for(j=0; j<MAX_DEVICES; j++) printf(" %c",*(devices+j));
 		printf(" ]\n");
 	#endif
+	printf("    New device now can be connected.\n\n");
 	return 0;
 }
 
@@ -254,7 +257,7 @@ int setLED(int fd, unsigned char* ports, char* devices)
 {
 	printf("    Which LED do you want to setup? (select a port: 0-7)\n");
 	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
-	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n\n");
+	printf("    4= pin7, 5= pin8, 6= pin46, 7= pin44\n\n");
 	char port[1];
 	do
 	{
