@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>   /* File Control Definitions           */
@@ -6,30 +7,76 @@
 #include <unistd.h>  /* UNIX Standard Definitions 	       */
 #include <errno.h>   /* ERROR Number Definitions           */
 
-#define MAX_WRITE 32
-#define MAX_READ 2
-#define MAX_PAYLOAD 29
-#define INPUT_FAIL 0x20
-#define TO_INT_MASK 0x30
+#define MAX_SERIAL 8
+#define MAX_CONTROLLER_NAME 20
+#define MAX_DEV_TYPES 2
 #define MAX_DEVICES 8
+
+#define INPUT_FAIL 0x10
+#define YES 0x79
+#define NO 0x6E
+#define TO_INT_MASK 0x30
+#define SIZECTL_MASK 0x07
+
 #define NO_DEV 0x4E
-#define TEMP_SENSOR 0x53
+#define PHOTORESISTOR 0x50
 #define LED 0x4C
 
 #define CMD_START 0x01
-#define CMD_ASSIGN 0x02
-#define CMD_READINGS 0x03
-#define CMD_LED_SETUP 0x04
-#define CMD_TEMP_SETUP 0x05
+#define CMD_LED_SETUP 0x02
+#define CMD_PR_SETUP 0x03
+#define CMD_PR_READING 0x04
+#define CMD_REMOVE_LED 0x05
+#define CMD_REMOVE_PR 0x06
 
-#define CMD_ASSIGN_SIZE 0x02
+#define CMD_START_SIZE 0x05
 #define CMD_LED_SETUP_SIZE 0x02
+#define CMD_PR_SETUP_SIZE 0x02
+#define CMD_PR_READING_SIZE 0x01
+#define CMD_REMOVE_LED_SIZE 0x01
+#define CMD_REMOVE_PR_SIZE 0x01
 
-int SetSerialSettings(int fd, int speed, int parity)
+#define RSP_ACK 0x41
+#define RSP_NACK 0x4E
+#define RSP_UCMD 0x55   // Uknown command response
+#define RSP_UPORT 0x50  // Uknown port response
+
+
+typedef struct SmartHouse
+{
+	int fd;
+	char controller[MAX_CONTROLLER_NAME];
+	char devLED[MAX_DEVICES];
+	char devPR[MAX_DEVICES];
+	unsigned char lastPckSent[MAX_SERIAL];
+	unsigned char lastPckReceived[MAX_SERIAL];
+}SmartHouse;
+
+/* SmartHouse declaration */
+SmartHouse sh;
+
+const char pins[MAX_DEV_TYPES][MAX_DEVICES]= {{0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0xa6,0xa7},
+                                              {0x02,0x03,0x05,0x06,0x07,0x08,0x0b,0x0c}};
+
+void smartHouseInit(SmartHouse *sh, int descriptor)
+{
+	sh->fd= descriptor;
+	*sh->controller= '\0';    //empty string when attempting to print it
+	int i;
+	for(i=0; i<MAX_DEVICES; i++)
+	{
+		sh->devLED[i]= NO_DEV;
+		sh->devPR[i]= NO_DEV;
+		sh->lastPckSent[i]= 0;
+		sh->lastPckReceived[i]= 0;
+	}
+}
+
+int setSerialSettings(int fd, int speed, int parity)
 {
 	struct termios SerialPortSettings;	/* Create the structure                          */
 
-	if(tcgetattr(fd, &SerialPortSettings) != 0)	/* Get the current attributes of the Serial port */
+	if(tcgetattr(fd, &SerialPortSettings) != 0)	/* Get the current attributes of the Serial pin */
 	{
 		printf("\n ERROR getting attributes");
     return -1;
@@ -59,11 +106,9 @@ int SetSerialSettings(int fd, int speed, int parity)
 	}
 }
 
-/* Packet assembling and sending */
-int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* message)
+/*-----------------------Packets handling functions---------------------------------------------*/
+int pckSend(SmartHouse *sh, unsigned char command, unsigned char size, unsigned char* message)
 {
-	unsigned char write_buffer[MAX_WRITE]= {0};
-
 	unsigned char sizeCopy= size;   /* for printing purposes */
 	#ifdef DEBUG
 		printf("\n  Command(debug): %x\n",command);
@@ -82,7 +127,7 @@ int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* mes
 	#ifdef DEBUG
 		printf("  sizeControl: %x\n",sizeControl);
 	#endif
-	size <<= 3;                  /* size field only needs 5 bits (29 is max value) */
+	size <<= 3;                  /* space for sizeControl bits */
 	size |= sizeControl;
 
 
@@ -92,8 +137,8 @@ int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* mes
 	int i;
 	for(i=0; i<sizeCopy; i++)
 	{
-		*(write_buffer+i+3)= *(message+i);    /* 4°-32° Byte Payload writing */
-		csum += *(message+i);                 /* Checksum processing (no carry)  */
+		*((sh->lastPckSent)+i+3)= *(message+i);    /* 4°-32° Byte Payload writing     */
+		csum += *(message+i);                      /* Checksum processing (no carry)  */
 	}
 	#ifdef DEBUG
 		printf("  Calcolo checksum (no carry): %x\n",csum);
@@ -104,47 +149,177 @@ int PckSend(int fd,unsigned char command, unsigned char size, unsigned char* mes
 	#endif
 
 	/*-------------------------Final packet assembling------------------------------------------------ */
-	*(write_buffer+0)= command;             /* 1° Byte Command  */
+	*((sh->lastPckSent)+0)= command;             /* 1° Byte Command  */
 	/* truncate 1 byte, Little endian system (intel processor) */
-	*(write_buffer+1)= (char)csum;          /* 2° Byte Checksum */
-	*(write_buffer+2)= size;                /* 3° Byte Size     */
+	*((sh->lastPckSent)+1)= (char)csum;          /* 2° Byte Checksum */
+	*((sh->lastPckSent)+2)= size;                /* 3° Byte Size     */
 
 	/*-----------------------------Packet sending-------------------------------------------------------*/
-	int bytes_written= 0;  	/* Value for storing the number of bytes written to the port */
-	bytes_written= write(fd,write_buffer, MAX_WRITE);
-						           /* "fd"                   - file descriptor pointing to the opened serial port */
-									     /*	"write_buffer"         - address of the buffer containing data	            */
-									     /* "MAX_WRITE" - No of bytes to write                                          */
+	int bytesWritten= 0;  	/* Value for storing the number of bytes written to the pin */
+	bytesWritten= write(sh->fd,(sh->lastPckSent), MAX_SERIAL);
+						           /* "fd"                   - file descriptor pointing to the opened serial pin */
+									     /*	"(sh->lastPckSent)"         - address of the buffer containing data	        */
+									     /* "MAX_SERIAL" - No of bytes to write                                         */
 	#ifdef DEBUG
 		printf("\n  Bytes: [ ");
 		int h;
-		for(h=0;h<bytes_written;h++)
-			printf("%c ",write_buffer[h]);
+		for(h=0;h<bytesWritten;h++)
+			printf("%c ",(sh->lastPckSent)[h]);
 
 		printf("] written to ttyACM0\n");
 		printf("\n  Bytes(hex): [ ");
-		for(h=0;h<bytes_written;h++)
-			printf("%x ",write_buffer[h]);
+		for(h=0;h<bytesWritten;h++)
+			printf("%x ",(sh->lastPckSent)[h]);
 
 		printf("] written to ttyACM0\n");
-		printf("\n  %d Bytes written to ttyACM0\n\n", bytes_written);
+		printf("\n  %d Bytes written to ttyACM0\n\n", bytesWritten);
 	#endif
 
-	if(bytes_written <= 0) return -1;
+	if(bytesWritten <= 0) return -1;
 	else return 0;
 }
 
-void printMenu(char *controller)
+int pckReceive(SmartHouse *sh)
+{
+	#ifdef DEBUG
+		printf("\n  Receiving data... ");
+	#endif
+
+	char bufferRead[MAX_SERIAL]= {0};
+	int toRead= MAX_SERIAL;
+	int prevReading= 0;
+	do
+	{
+		int  bytesRead = 0;    // Number of bytes read by the read() system call
+		bytesRead = read(sh->fd,bufferRead,toRead); // Read the data
+
+		#ifdef DEBUG
+			printf("\n\n  Bytes read: %d from ttyACM0", bytesRead); // Print the number of bytes read
+			printf("\n\n  ");
+
+			int j;
+			for(j=0;j<bytesRead;j++)	 // printing only the received characters
+				printf(" %x",(unsigned char)bufferRead[j]);
+		#endif
+
+		int i;
+		for(i=0; i<bytesRead+prevReading; i++)
+			sh->lastPckReceived[i+prevReading]= bufferRead[i];
+
+		if(bytesRead <= 0) return -1;
+		toRead-= bytesRead;
+		prevReading+= bytesRead;
+	}while(toRead>0);
+
+	#ifdef DEBUG
+		printf("\n\n  Last packet read(debug): ");
+		int k;
+		for(k=0;k<MAX_SERIAL;k++)
+			printf(" %x",(unsigned char)sh->lastPckReceived[k]);
+		printf("\n\n");
+	#endif
+
+	return 0;
+}
+
+int pckCheck(SmartHouse *sh)
+{
+	/* Check if ack has been received */
+	if(sh->lastPckReceived[0] != RSP_ACK)
+	{
+		printf("\n ERROR response packet was not an ack, response[%x]\n",sh->lastPckReceived[0]);
+		return -1;
+	}
+	/* Check if ack belongs to the last command sent */
+	if(sh->lastPckReceived[3] != sh->lastPckSent[0])
+	{
+		printf("\n ERROR response packet doesn't belong to the last command issued, command[%x]\n",sh->lastPckReceived[3]);
+		return -1;
+	}
+
+	/* Check control bits of size field */
+  unsigned char sizeCtl= (sh->lastPckReceived[2]) & SIZECTL_MASK;
+  unsigned char sizeControl= 0;
+  unsigned char temp= sh->lastPckReceived[2] >>3;  /* discard 3 LSB to recover size */
+	int k;
+	for(k=0; k<5; k++){
+		sizeControl += temp&1;      /* counting 1 bits among the first 5 bits of size */
+		temp>>=1;
+	}
+  if(sizeCtl != sizeControl) return -1;
+
+  /* Checksum processing */
+  unsigned char cmd= sh->lastPckReceived[0];
+  unsigned char cksum= sh->lastPckReceived[1];
+  unsigned char sz= sh->lastPckReceived[2];
+
+ 	unsigned short checksum= 0;
+	checksum += cmd+sz;
+	int i;
+	for(i=3; i<MAX_SERIAL; i++){
+		checksum += sh->lastPckReceived[i];                /* Checksum processing (no carry)  */
+	}
+	if(checksum>>8) checksum++;                  /* Checksum carry added if present */
+  if(cksum != (unsigned char)checksum)
+	{
+		printf("\n ERROR processing checksum, command[%x]\n",sh->lastPckReceived[3]);
+		return -1;     /* truncate 1 byte, Little endian system (intel)*/
+	}
+  /* All checks passed */
+	return 0;
+}
+
+void pckInit(SmartHouse *sh)
+{
+	int i;
+	for(i=0;i<MAX_SERIAL;i++)
+	{
+		*((sh->lastPckSent)+i)= 0x00;
+		*((sh->lastPckReceived)+i)= 0x00;
+	}
+}
+
+int dataExchange(SmartHouse *sh, unsigned char command, unsigned char size, unsigned char* payload)
+{
+	int try=10;
+	retry:
+		if(pckSend(sh,command,size,payload) != 0)
+		{
+			printf("\n ERROR sending a packet, command[%x]\n",command);
+			return -1;
+		}
+		if(pckReceive(sh) != 0)
+		{
+			printf("\n ERROR receiving a packet, command[%x]\n",command);
+			return -1;
+		}
+		if(pckCheck(sh) != 0)
+		{
+			if(try++ <10)
+			{
+				pckInit(sh);
+				goto retry;
+			}
+			printf("\n ERROR checking a packet, command[%x]\n",command);
+			return -1;
+		}
+
+	return 0;
+}
+/*-----------------------Client functions------------------------------------------------------*/
+
+void printMenu(SmartHouse *sh)
 {
 	printf("\n +----------------------------------------------------------------------------------------------+\n\n");
-	printf("    Connected to: %s\n\n",controller);
+	printf("    Connected to: %s\n\n",sh->controller);
 	printf("    You can perform the following actions(select one):\n\n");
 
 	printf("    1- Query available ports\n");
-	printf("    2- Assign a new device(temp_sensor or led) to an available port\n");
-	printf("    3- Setup an installed led\n");
-	printf("    4- Setup an installed temp sensor\n");
-	printf("    5- Get readings from installed temp sensors\n");
+	printf("    2- Install a LED\n");
+	printf("    3- Install a photoresistor\n");
+	printf("    4- Get a reading from an installed photoresistor\n");
+	printf("    5- Uninstall a LED\n");
+	printf("    6- Uninstall a photoresistor\n");
 
 	printf("    9- Restart the configuration process(all data will be lost)\n");
 	printf("    0- Exit the application\n\n");
@@ -153,127 +328,46 @@ void printMenu(char *controller)
 void filterInput(char* input, int filter)
 {
 	fgets(input,filter+1,stdin);
-	if(!strchr(input, '\n'))         // if string entered is longer than 1 char, input doesn't contain '\n'
+	if(!strchr(input, '\n'))         // if string entered is longer than "filter" char, input doesn't contain '\n'
 		while(fgetc(stdin)!='\n')      // discard until newline, empty stdin buffer
-	  	*input = INPUT_FAIL;         // inside the while a string with 2+ characters was passed
+	  	*input = INPUT_FAIL;         // inside the while a string with "filter" or more characters was passed
 }
 
-void queryChannels(unsigned char* ports, char* devices)
+void queryChannels(SmartHouse *sh)
 {
-	printf("\n\n    Port-Device assignments(S= sensor, L=led, N= not assigned):\n");
-	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
-	printf("    4= pin7, 5= pin8, 6= pin46, 7= pin44\n\n");
-	printf("    [");
+	printf("\n\n    Port-Device assignments (P= photoresistor, L=led, N= not assigned):\n\n");
+
+	printf("    Photoresistor pins\n");
 	int i;
-	for(i=0; i<MAX_DEVICES; i++)
-			printf(" Port[%d]-Dev[%c]",i,*(devices+i));
-	printf(" ]\n\n");
+	for(i=0; i<MAX_DEVICES/2; i++)
+			printf("	Pin[%x]-Dev[%c]",(unsigned char)pins[0][i],*((sh->devPR)+i));
+	printf("\n");
+	for(;i<MAX_DEVICES; i++)
+			printf("	Pin[%x]-Dev[%c]",(unsigned char)pins[0][i],*((sh->devPR)+i));
+	printf("\n\n");
+
+	printf("    LED pins\n");
+	for(i=0; i<MAX_DEVICES/2; i++)
+			printf("	Pin[%d]-Dev[%c]",pins[1][i],*((sh->devLED)+i));
+	printf("\n");
+	for(; i<MAX_DEVICES; i++)
+		printf("	Pin[%d]-Dev[%c]",pins[1][i],*((sh->devLED)+i));
+	printf("\n\n");
 }
 
-int assignToPort(int fd, unsigned char* ports, char* devices)
+int setLED(SmartHouse *sh)
 {
-	printf("    To which port are you connecting the device(0-7)?\n");
+	printf("    Which LED do you want to setup? (select a pin: 0-7)\n");
 	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
-	printf("    4= pin7, 5= pin8, 6= pin46, 7= pin44\n");
-	printf("    Ports 4-7 have advanced LED features\n\n");
-	char port[1];
+	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n");
+	printf("    Pins 4-7 have advanced LED features\n\n");
+	char pin[1];
 	do
 	{
-		printf("    Port chosen: ");
-		filterInput(port,sizeof(port));
-	}while(((*port)-TO_INT_MASK >7) || ((*port)-TO_INT_MASK <0));
+		printf("    Pin chosen: ");
+		filterInput(pin,sizeof(pin));
+	}while(((*pin)-TO_INT_MASK >7) || ((*pin)-TO_INT_MASK <0));
 	printf("\n");
-	/* if port chosen is already in use wait for confirmation new device was connected */
-	if ((1<<((*port)-TO_INT_MASK)) & *ports) {
-		printf("    The port chosen is already occupied. Be sure to disconnect the old device before going on\n");
-		printf("    When you are ready press y|Y.\n\n");
-		char ack[1];
-		do
-		{
-			printf("    Ready? ");
-			filterInput(ack,sizeof(ack));
-		}while(*ack != 0x59 && *ack != 0x79);  /* *ack must be y or Y */
-		printf("\n");
-	}
-
-	printf("    Which kind of device do you want to connect?\n\n");
-	printf("    1- Temperature sensor");
-	printf("    2- LED\n\n");
-	char dev[1];
-	do
-	{
-		printf("    Device chosen: ");
-		filterInput(dev,sizeof(dev));
-	}while(((*dev)-TO_INT_MASK >2) || (*dev)-TO_INT_MASK <1);
-	printf("\n");
-
-	unsigned char command= CMD_ASSIGN;
-	unsigned char size= CMD_ASSIGN_SIZE;
-	unsigned char payload[CMD_ASSIGN_SIZE]= {0};
-	if((*dev)-TO_INT_MASK == 1)
-	{
-		/* send sensor packet */
-		*payload= TEMP_SENSOR;
-		*(payload+1)= *port;
-		if(PckSend(fd,command,size,payload) != 0)
-		{
-			printf("\n ERROR sending assignToPort() packet");
-			return -1;
-		}
-	}
-	else
-	{
-		/* send LED packet */
-		*payload= LED;
-		*(payload+1)= *port;
-		if(PckSend(fd,command,size,payload) != 0)
-		{
-			printf("\n ERROR sending assignToPort() packet");
-			return -1;
-		}
-	}
-	#ifdef DEBUG
-		printf(" Ports before new assign(debug): %x\n",*ports); //bug assegnare a porta 1 cancella il dev in porta 0
-		printf(" Devices before(debug): [");
-		int i;
-		for(i=0; i<MAX_DEVICES; i++) printf(" %c",*(devices+i));
-		printf(" ]\n");
-	#endif
-	*ports= (*ports | (1<<((*port)-TO_INT_MASK)));
-	(*dev)--;
-	*(devices + ((*port)-TO_INT_MASK))= ((*dev)-TO_INT_MASK) ? LED : TEMP_SENSOR;
-	#ifdef DEBUG
-		printf(" Ports after new assign(debug): %x\n",*ports);
-		printf(" Devices after(debug): [");
-		int j;
-		for(j=0; j<MAX_DEVICES; j++) printf(" %c",*(devices+j));
-		printf(" ]\n");
-	#endif
-	printf("    New device now can be connected.\n\n");
-	return 0;
-}
-
-int setLED(int fd, unsigned char* ports, char* devices)
-{
-	printf("    Which LED do you want to setup? (select a port: 0-7)\n");
-	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
-	printf("    4= pin7, 5= pin8, 6= pin46, 7= pin44\n\n");
-	char port[1];
-	do
-	{
-		printf("    Port chosen: ");
-		filterInput(port,sizeof(port));
-	}while(((*port)-TO_INT_MASK >7) || ((*port)-TO_INT_MASK <0));
-	printf("\n");
-
-	/* Check if a device, which is a LED, has been assigned to the port, else an error is reported */
-	if( (((*ports) & (1<<((*port)-TO_INT_MASK))) == 0) || (*(devices + ((*port)-TO_INT_MASK))!= LED))
-	{
-		printf("\n No device or no LED is assigned to the port selected. ");
-		printf("Assign a LED to a port before attempting again\n\n");
-		return -1;
-	}
-
 
 	printf("    Choose a value to setup LED brightness level(0-255), using 3 digits(eg: 1=001):\n\n");
 	char brightness[3]={0};
@@ -288,90 +382,265 @@ int setLED(int fd, unsigned char* ports, char* devices)
 	 || (((*brightness)-TO_INT_MASK ==2) && ((*(brightness+1))-TO_INT_MASK ==5) && ((*(brightness+2))-TO_INT_MASK >5)));
 	printf("\n");
 
-	unsigned char command= CMD_LED_SETUP;
-	unsigned char size= CMD_LED_SETUP_SIZE;
 	unsigned char payload[CMD_LED_SETUP_SIZE]= {0};
-	*payload= *port;
+	*payload= *pin;
 	*(payload+1)= ((*(brightness))  -TO_INT_MASK)*100
 						   +((*(brightness+1))-TO_INT_MASK)*10
 	           	 +((*(brightness+2))-TO_INT_MASK)*1;
-
 	#ifdef DEBUG
 		printf(" Brightness level(debug): %d\n\n",(int)(*(payload+1)));
 	#endif
-	if(PckSend(fd,command,size,payload) != 0)
+
+	/* send set_led packet */
+	if(dataExchange(sh,CMD_LED_SETUP,CMD_LED_SETUP_SIZE,payload) != 0)
 	{
-		printf("\n ERROR sending setLED() packet");
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_LED_SETUP);
 		return -1;
 	}
-
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	/* register new LED */
+	*((sh->devLED) + ((*pin)-TO_INT_MASK))= LED;
 	return 0;
 }
 
-int start(int fd, char* controller)
+int setPR(SmartHouse *sh)
+{
+	printf("    Which photoresistor do you want to setup? (select a pin: 0-7)\n");
+	printf("    0= pinA0, 1= pinA1, 2= pinA2,  3= pinA3\n");
+	printf("    4= pinA4, 5= pinA5, 6= pinA6, 7= pinA7\n\n");
+	char pin[1];
+	do
+	{
+		printf("    Pin chosen: ");
+		filterInput(pin,sizeof(pin));
+	}while(((*pin)-TO_INT_MASK >7) || ((*pin)-TO_INT_MASK <0));
+	printf("\n");
+
+	printf("    Select if you want to assign this photoresistor to a pwm LED or a default LED.\n");
+	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
+	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n\n");
+
+	printf("    0-7) for a pwm LED pin\n");
+	printf("    8) default LED\n\n");
+	char ledPin[1];
+	do
+	{
+		printf("    Pin chosen: ");
+		filterInput(ledPin,sizeof(ledPin));
+	}while(((*ledPin)-TO_INT_MASK >8) || ((*ledPin)-TO_INT_MASK <1));
+	printf("\n");
+
+	unsigned char payload[CMD_PR_SETUP_SIZE]= {0};
+	*payload= *pin;
+	*(payload+1)= (*ledPin)-TO_INT_MASK;
+	/* send set_photoresistor packet */
+	if(dataExchange(sh,CMD_PR_SETUP,CMD_PR_SETUP_SIZE,payload) != 0)
+	{
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_PR_SETUP);
+		return -1;
+	}
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	/* register new photoresistor */
+	*((sh->devPR) + ((*pin)-TO_INT_MASK))= PHOTORESISTOR;
+	return 0;
+}
+
+int getPRreading(SmartHouse *sh)
+{
+	printf("    Which photoresistor do you want to read? (select a pin: 0-7)\n");
+	printf("    0= pinA0, 1= pinA1, 2= pinA2,  3= pinA3\n");
+	printf("    4= pinA4, 5= pinA5, 6= pinA6, 7= pinA7\n\n");
+	char pin[1];
+	do
+	{
+		printf("    Pin chosen: ");
+		filterInput(pin,sizeof(pin));
+	}while(((*pin)-TO_INT_MASK >7) || ((*pin)-TO_INT_MASK <0));
+	printf("\n");
+
+	/* send get_photoresistor_reading packet */
+	if(dataExchange(sh,CMD_PR_READING,CMD_PR_READING_SIZE,(unsigned char*)pin) != 0)
+	{
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_PR_READING);
+		return -1;
+	}
+	/* preparing result to print it */
+	unsigned short valueRead= 0;
+	valueRead |= sh->lastPckReceived[3];
+	valueRead <<= 8;
+	valueRead |= sh->lastPckReceived[4];
+	printf("\n    Current photoresistor value on the adc pin[%x]: %hu\n\n",pins[1][(*pin)-TO_INT_MASK],valueRead);
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	return 0;
+}
+
+int removeLED(SmartHouse *sh)
+{
+	printf("    To which pin belongs the device(0-7)?\n");
+	printf("    0= pin2, 1= pin3, 2= pin5,  3= pin6\n");
+	printf("    4= pin7, 5= pin8, 6= pin11, 7= pin12\n\n");
+	char pin[1];
+	do
+	{
+		printf("    Pin chosen: ");
+		filterInput(pin,sizeof(pin));
+	}while(((*pin)-TO_INT_MASK >7) || ((*pin)-TO_INT_MASK <0));
+	printf("\n");
+
+	/* send remove packet */
+	if(dataExchange(sh,CMD_REMOVE_LED,CMD_REMOVE_LED_SIZE,(unsigned char*)pin) != 0)
+	{
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_REMOVE_LED);
+		return -1;
+	}
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	/* unregister old LED */
+	*((sh->devLED) + ((*pin)-TO_INT_MASK))= NO_DEV;
+	return 0;
+}
+
+int removePR(SmartHouse *sh)
+{
+	printf("    To which pin belongs the device(0-7)?\n");
+	printf("    0= pinA0, 1= pinA1, 2= pinA2, 3= pinA3\n");
+	printf("    4= pinA4, 5= pinA5, 6= pinA6, 7= pinA7\n\n");
+	char pin[1];
+	do
+	{
+		printf("    Pin chosen: ");
+		filterInput(pin,sizeof(pin));
+	}while(((*pin)-TO_INT_MASK >7) || ((*pin)-TO_INT_MASK <0));
+	printf("\n");
+
+	/* send remove packet */
+	if(dataExchange(sh,CMD_REMOVE_PR,CMD_REMOVE_PR_SIZE,(unsigned char*)pin) != 0)
+	{
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_REMOVE_PR);
+		return -1;
+	}
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	/* unregister old photoresistor */
+	*((sh->devPR) + ((*pin)-TO_INT_MASK))= NO_DEV;
+	return 0;
+}
+
+int start(SmartHouse *sh)
 {
 	printf("    Welcome to the configuration process, you need to choose a name for the controller first.\n");
-	printf("    Name length must be up to 29 characters and cannot be void.\n\n");
+	printf("    Name length must be up to 20 characters and cannot be void.\n\n");
 
 	do
 	{
 		printf("    Controller Name: ");
-		fgets(controller,MAX_PAYLOAD+1,stdin);
-		#ifdef DEBUG
-			printf("    Controller(debug): %s\n",controller);
-			printf("    Size fgets(debug): %d\n\n",(int)strlen(controller));
-		#endif
-	}while(strlen(controller)<=1);
+		filterInput(sh->controller, MAX_CONTROLLER_NAME);
+	}while(strlen(sh->controller)<=1 || (*(sh->controller))== INPUT_FAIL);
+	printf("\n");
+	#ifdef DEBUG
+		printf("    Controller(debug): %s\n",sh->controller);
+		printf("    Size fgets(debug): %d\n\n",(int)strlen(sh->controller));
+	#endif
 
-	unsigned char command= CMD_START;
-	unsigned char size= strlen(controller)-1;
-	unsigned char *payload= (unsigned char*)controller;
-
-	if(PckSend(fd,command,size,payload) != 0)
+	/* send start packet */
+	if(dataExchange(sh,CMD_START,CMD_START_SIZE,(unsigned char*)"HELLO") != 0)
 	{
-		printf("\n ERROR sending start() packet");
-		return -1;
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_START);
+	}
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	return 0;
+}
+
+int save(SmartHouse *sh) //da implementare
+{
+	printf("    Do you want to save current configuration? (y/n)\n\n");
+	char choice[1];
+	do
+	{
+		printf("    Input: ");
+		filterInput(choice,sizeof(choice));
+	}while(((*choice) != YES) && ((*choice) != NO));
+	printf("\n");
+
+	if((*choice) == YES)
+	{
+		printf("    Saving current configuration...\n");
+		FILE *fileToSave;
+		fileToSave= fopen("controller.txt","w+");
+		if(fileToSave == NULL)
+		{
+			return -1;
+		}
+		/* saving configuration */
+		char buffer[36+1];
+		int i;
+		for(i=0; i<20; i++)
+			buffer[i]= sh->controller[i];
+		for(; i<28; i++)
+			buffer[i]= 	sh->devLED[i-20];
+		for(; i<36; i++)
+			buffer[i]= sh->devPR[i-28];
+
+		fputs(buffer,fileToSave);
+		fclose(fileToSave);
+		printf("    DONE.\n\n");
 	}
 	return 0;
 }
 
-void save(char* controller) //da implementare
-{
-
-}
-
 /* Perform selected action */
-int selectAction(int fd, char* controller, unsigned char* ports, char* devices, char action)
+int selectAction(SmartHouse *sh, char action)
 {
 	switch(action)
 	{
 		case 1:
-			queryChannels(ports,devices);
+			queryChannels(sh);
 			return 0;
 		case 2:
-			if(assignToPort(fd,ports,devices) != 0)
+			if(setLED(sh) != 0)
 			{
-				printf("\n ERROR encountered calling assignToPort()");
+				printf("\n ERROR encountered during setLED()");
 			}
 			return 0;
 		case 3:
-			if(setLED(fd,ports,devices) != 0)
+			if(setPR(sh) != 0)
 			{
-				printf("\n ERROR encountered calling setLED()");
+				printf("\n ERROR encountered during setPR()");
 			}
 			return 0;
 		case 4:
+			if(getPRreading(sh) != 0)
+			{
+				printf("\n ERROR encountered during getPRreading()");
+			}
 			return 0;
 		case 5:
+			if(removeLED(sh) != 0)
+			{
+				printf("\n ERROR encountered during removeLED()");
+			}
+			return 0;
+		case 6:
+			if(removePR(sh) != 0)
+			{
+				printf("\n ERROR encountered during removePR()");
+			}
 			return 0;
 		case 9:
-			if(start(fd,controller) != 0)
+			if(start(sh) != 0)
 			{
-				printf("\n ERROR encountered calling start()");
+				printf("\n ERROR encountered during start()");
 			}
 			return 0;
 		case 0:
-			save(controller);
+			if(save(sh) != 0)
+			{
+				printf("\n ERROR encountered during save()");
+			}
 			exit(0);
 
 		default:
@@ -380,18 +649,47 @@ int selectAction(int fd, char* controller, unsigned char* ports, char* devices, 
 	}
 }
 
-void load(char* controller) //da implementare controller lo uso per caricarci il nome salvato sul file
+int load(SmartHouse *sh) //da implementare
 {
+	printf("    Do you want to load last configuration? (y/n)\n\n");
+	char choice[1];
+	do
+	{
+		printf("    Input: ");
+		filterInput(choice,sizeof(choice));
+	}while(((*choice) != YES) && ((*choice) != NO));
+	printf("\n");
 
+	if((*choice) == YES)
+	{
+		printf("    Loading previous configuration...\n");
+		FILE *savedFile;
+		savedFile= fopen("controller.txt", "r+");
+		if(savedFile == NULL)
+		{
+			return -1;
+		}
+		/* loading configuration */
+		char buffer[36+1];
+		fgets(buffer,36+1,savedFile);
+		int i;
+		for(i=0; i<20; i++)
+			sh->controller[i]= buffer[i];
+		for(; i<28; i++)
+			sh->devLED[i-20]= buffer[i];
+		for(; i<36; i++)
+			sh->devPR[i-28]= buffer[i];
+
+		fclose(savedFile);
+		printf("    DONE.\n\n");
+	}
+	return 0;
 }
 
-char controller[MAX_PAYLOAD];   /* store controller name */
-unsigned char ports= 0;         /* keeps track of ports, 1bit per port  */
-char devices[MAX_DEVICES]= {NO_DEV,NO_DEV,NO_DEV,NO_DEV,
-									          NO_DEV,NO_DEV,NO_DEV,NO_DEV}; /* keeps track of devices assigned to ports */
 
 int main(void)
 {
+	printf("\n");
 	printf("\n +----------------------------------------------------------------------------------------------+");
 	printf("\n |                                 SmartHouse: Configuration                                    |");
 	printf("\n +----------------------------------------------------------------------------------------------+\n\n");
@@ -400,7 +698,7 @@ int main(void)
 	int fd;  /*File Descriptor*/
   fd = open("/dev/ttyACM0",O_RDWR | O_NOCTTY | O_SYNC );
       /* /dev/ttyACM0 is the virtual file for the Arduino Board   */
-			/* O_RDWR Read/Write access to serial port           */
+			/* O_RDWR Read/Write access to serial pin           */
 			/* O_NOCTTY - No terminal will control the process   */
 	if(fd == -1)						/* Error Checking */
 	{
@@ -412,48 +710,37 @@ int main(void)
 			printf("\n  ttyACM0 Opened Successfully ");
 		#endif
 	}
-	if(SetSerialSettings(fd,B19200,0) != 0)
+	if(setSerialSettings(fd,B19200,0) != 0)
 	{
 		printf("\n ERROR during serial setup\n");
 		exit(1);
 	}
 	/*--------------------------------------------------------------------------*/
 
-	if(start(fd,controller) != 0)
+	smartHouseInit(&sh,fd);
+	if(load(&sh) != 0)
 	{
-		printf("\n ERROR encountered calling start()");
+		printf("\n ERROR during load()");
+		exit(-1);
+	}
+	if(start(&sh) != 0)
+	{
+		printf("\n ERROR during start()");
+		exit(-1);
 	}
 	while(1)
 	{
-		printMenu(controller);
+		printMenu(&sh);
 		char sel[1];
 		do
 		{
 			printf("    Entered: ");
 			filterInput(sel,sizeof(sel));
-		}while(selectAction(fd,controller,&ports,devices,(*sel)-TO_INT_MASK) != 0);
+		}while(selectAction(&sh,(*sel)-TO_INT_MASK) != 0);
 		printf("\n");
 	}
 
-	/*-----------------------------Receiving response-------------------------------------------------------*/
-
-	/*
-	printf("  Receiving data... \n");
-
-	char read_buffer[MAX_READ];   // Buffer to store the data received
-	int  bytes_read = 0;    // Number of bytes read by the read() system call
-	int j = 0;
-
-	bytes_read = read(fd,&read_buffer,MAX_READ); // Read the data
-
-	printf("\n\n  Bytes read: %d from ttyACM0", bytes_read); // Print the number of bytes read
-	printf("\n\n  ");
-
-	for(j=0;j<bytes_read;j++)	 // printing only the received characters
-		printf("%c",read_buffer[j]);
-	*/
-
 	printf("\n +----------------------------------------------------------------------------------------------+\n\n");
-	close(fd);   /* Close the Serial port */
+	close(fd);   /* Close the Serial pin */
 
 }

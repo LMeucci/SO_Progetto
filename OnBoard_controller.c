@@ -6,8 +6,8 @@
 #define USART_BAUDRATE 19200
 #define UBRR_VALUE (F_CPU/16/USART_BAUDRATE-1)
 
-#define MAX_READ 32
-#define MAX_WRITE 2
+#define MAX_SERIAL 8
+#define MAX_DEVICES 8 // per type
 
 #define PIN_2 0
 #define PIN_3 1
@@ -20,69 +20,60 @@
 
 #define SIZECTL_MASK 0x07
 #define TO_INT_MASK 0x30
-#define SWITCH_MASK1 0xff
+#define SWITCH_MASK 0xff
 #define BUTTON_STEP 26
 
 #define CMD_START 0x01
-#define CMD_ASSIGN 0x02
-#define CMD_READINGS 0x03
-#define CMD_LED_SETUP 0x04
-#define CMD_TEMP_SETUP 0x05
+#define CMD_LED_SETUP 0x02
+#define CMD_PR_SETUP 0x03
+#define CMD_PR_READING 0x04
+#define CMD_REMOVE_LED 0x05
+#define CMD_REMOVE_PR 0x06
+
+#define CMD_START_SIZE 0x2a
+#define CMD_ADC_SIZE 0x02
 
 #define RSP_ACK 0x41
 #define RSP_NACK 0x4E
-#define RSP_UCMD 0x55
-#define RSP_UPORT 0x50
+#define RSP_UCMD 0x55   // Uknown command response
+#define RSP_UPORT 0x50  // Uknown port response
 
 /*--------------------------------All packet related things----------------------------------*/
-typedef struct{
-  uint8_t buffer[MAX_READ];   /* Payload buffer */
+typedef struct
+{
+  uint8_t buffer[MAX_SERIAL];   /* Payload buffer */
   uint8_t index;              /* index to navigate buffer, points to the next empty location */
 }Packet;
 
-/* Packet declaration */
+/* Packet received */
 Packet pck;
-/* Response packets */
+/* Packet transmitted (response) */
 Packet rsp;
 
 /* variables used to handle pwm and timer5      ----> [NOT IN USE] <-----
 const uint16_t timer_duration_ms= 500;*/
-uint8_t brightnessLED[8]={0};
 //volatile uint8_t blinker= 0;
-
 
 /* pins used to handle switches */
 volatile uint8_t current_pins;
 
 /* Packets initialization(erasing) */
-void PckInit(Packet *pck)
+void packetBufferInit(Packet *pck)
 {
   pck->index=0;    /* starting empty buffer location */
+  int i;
+  for(i=0; i< MAX_SERIAL; i++)
+    pck->buffer[i]= 0;
 }
 
-void RspInit(Packet *rsp)
+void responseInit(Packet *rsp, uint8_t signal)
 {
-  rsp->index=0;
-  rsp->buffer[0]= RSP_NACK;   /* NAck response stored in the first byte */
-  rsp->buffer[1]= RSP_NACK;   /* Only one field so checksum is just its copy */
-}
-
-void RspAck(Packet *rsp)
-{
-  rsp->buffer[0]= RSP_ACK;   /* Ack response */
-  rsp->buffer[1]= RSP_ACK;
-}
-
-void RspUcmd(Packet *rsp)
-{
-  rsp->buffer[0]= RSP_UCMD;   /* Unknown command response */
-  rsp->buffer[1]= RSP_UCMD;
-}
-
-void RspUport(Packet *rsp)
-{
-  rsp->buffer[0]= RSP_UPORT;  /* Unknown port response */
-  rsp->buffer[1]= RSP_UPORT;
+  rsp->index= 0;
+  rsp->buffer[0]= signal;  // response signal stored in the first byte
+  rsp->buffer[1]= signal;  // second byte contains checksum
+  int  i;
+  for(i=2; i< MAX_SERIAL; i++)
+    rsp->buffer[i]= 0;
 }
 
 /* setup pwm using timer1 */
@@ -92,7 +83,6 @@ void pwmInit(uint8_t pin, uint8_t brightness)
                          0=pin2, 1=pin3, 2=pin5,  3=pin6,
                          4=pin7, 5=pin8, 6=pin46, 7=pin44*/
   brightness= 255 -brightness; // need to invert user input because brightness=255 -> led off
-  *(brightnessLED+(pin-TO_INT_MASK))= brightness;
   switch(pin-TO_INT_MASK)
   {
     case PIN_2:
@@ -145,7 +135,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       break;
     case PIN_46:
       /* timer5, channel A (pin46), Fast PWM, non inverted, 8bit */
-      TCCR5A |= (1<<COM5A1) | (1<<COM5A0) | (1<<WGM50);
+      TCCR5A |= (1<<COM5A1) | (1<<COM5A0) | (1<<WGM50); //
       TCCR5B |= (1<<WGM52) | (1<<CS50);  // no prescaler
       DDRL |= (1<<PL3);                  // output pin set
       OCR5AH= 0;
@@ -161,7 +151,7 @@ void pwmInit(uint8_t pin, uint8_t brightness)
       break;
 
     default:
-      RspUport(&rsp);
+      responseInit(&rsp,RSP_UPORT);
       break;
   }
 }
@@ -169,8 +159,6 @@ void pwmInit(uint8_t pin, uint8_t brightness)
 /* if the packet is valid return 1 and allows its processing */
 uint8_t PckCheck(Packet *pck)
 {
-  //PckInit(pck); /*chiamata utile per resettare index, serve solo per la ritrasmissione (echo) del pacchetto*/
-
   /* Check control bits of size field */
   uint8_t sizeCtl= (pck->buffer[2]) & SIZECTL_MASK;
   uint8_t sizeControl= 0;
@@ -190,14 +178,89 @@ uint8_t PckCheck(Packet *pck)
   uint16_t checksum= 0;
 	checksum += cmd+sz;
 	int i;
-	for(i=3; i<MAX_READ; i++){
+	for(i=3; i<MAX_SERIAL; i++){
 		checksum += pck->buffer[i];                /* Checksum processing (no carry)  */
 	}
 	if(checksum>>8) checksum++;                  /* Checksum carry added if present */
   if(cksum != (uint8_t)checksum) return 0;     /* truncate 1 byte, Little endian system (ATMega 2560)*/
   /* All checks passed */
-  RspAck(&rsp);
+  responseInit(&rsp, RSP_ACK);
   return 1;
+}
+
+void start(Packet *rsp)
+{
+  /* preprocessed checksum value(start packet is always the same) cmd+"hello" */
+  rsp->buffer[1]= 0xe0;
+  /* handshake size + message: HELLO */
+  rsp->buffer[2]= CMD_START_SIZE;
+  rsp->buffer[3]= CMD_START;
+}
+
+void adc_read(uint8_t channel, Packet *rsp)
+{
+  // select the corresponding channel 0~7
+  ADMUX = (ADMUX & 0xF8)|channel; // clears the bottom 3 bits before ORing
+
+  // start single convertion
+  // write ’1′ to ADSC
+  ADCSRA |= (1<<ADSC);
+
+  // wait for conversion to complete
+  // ADSC becomes ’0′ again
+  // till then, run loop continuously
+  while(ADCSRA & (1<<ADSC));
+
+  rsp->buffer[2]= CMD_ADC_SIZE;
+  rsp->buffer[3]= ADCL;
+  rsp->buffer[4]= ADCH;
+}
+
+void photoresistorInit(uint8_t pin)
+{
+  /*---------pin mapping:-------------
+                         0=pin2, 1=pin3, 2=pin5,  3=pin6,
+                         4=pin7, 5=pin8, 6=pin46, 7=pin44 */
+  switch(pin-TO_INT_MASK)
+  {
+    case PIN_2:
+      DDRE &= ~(1<<PE4);
+      break;
+    case PIN_3:
+      DDRE &= ~(1<<PE5);
+      break;
+    case PIN_5:
+      DDRE &= ~(1<<PE3);
+      break;
+    case PIN_6:
+      DDRH &= ~(1<<PH3);
+      break;
+    case PIN_7:
+      DDRH &= ~(1<<PH4);
+      break;
+    case PIN_8:
+      DDRH &= ~(1<<PH5);
+      break;
+    case PIN_46:
+      // AREF = AVcc (5V), ADC6 selected
+      ADMUX = (1<<REFS0)|(1<<MUX1)|(1<<MUX0);
+      // ADC Enable and prescaler of 128, 16000000/128 = 125000 Hz
+      ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
+      adc_read(PIN_46, &rsp);
+      break;
+    case PIN_44:
+      // AREF = AVcc (5V), ADC7 selected
+      ADMUX = (1<<REFS0)|(1<<MUX2)|(1<<MUX1)|(1<<MUX0);
+      // ADC Enable and prescaler of 128, 16000000/128 = 125000 Hz
+      ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
+      break;
+
+    default:
+      responseInit(&rsp,RSP_UPORT);
+      break;
+  }
+
+  //timerInit(); // start timer to get timed readings from temp sensor
 }
 
 /* packet processing based on command */
@@ -208,23 +271,28 @@ void PckProcess(Packet *pck)
   {
     case 1:
       // handle start()
+      start(&rsp);
       break;
     case 2:
-      // handle assign dev to port
+      // handle led setup
       break;
     case 3:
-      // handle readings from a temp_sensor dev
+      // handle photoresistor setup
       break;
     case 4:
-      // handle siren setup
+      // handle photoresistor reading
       pwmInit(pck->buffer[3],pck->buffer[4]);
       break;
     case 5:
-      // handle led setup
+      // handle remove led
+      photoresistorInit(pck->buffer[3]);
+      break;
+    case 6:
+      //handle remove photoresistor
       break;
 
     default:
-      RspUcmd(&rsp);
+      responseInit(&rsp, RSP_UCMD);
       break;
   }
 
@@ -233,7 +301,7 @@ void PckProcess(Packet *pck)
 /* write to buffer routine */
 uint8_t PckReceive(Packet *pck, uint8_t u8data)
 {
-  if (pck->index<MAX_READ)
+  if (pck->index<MAX_SERIAL)
   {
     pck->buffer[pck->index] = u8data;
     pck->index++;
@@ -245,7 +313,7 @@ uint8_t PckReceive(Packet *pck, uint8_t u8data)
 /* read from buffer routine */
 uint8_t RspSend(Packet *pck, volatile uint8_t *u8data)
 {
-  if(pck->index<MAX_WRITE) //inserire MAX_READ per modalità echo, altrimenti MAX_WRITE
+  if(pck->index<MAX_SERIAL)
   {
     *u8data=pck->buffer[pck->index];
     pck->index++;
@@ -271,12 +339,12 @@ ISR(USART0_RX_vect)
 {
   uint8_t u8temp;
   u8temp=UDR0;
-  if ((PckReceive(&pck, u8temp)==1)||(pck.index==MAX_READ))    /* check if packet is complete(index=32) */
+  if ((PckReceive(&pck, u8temp)==1)||(pck.index==MAX_SERIAL))    /* check if packet is complete */
   {
     /* disable reception and RX Complete interrupt */
     UCSR0B &= ~((1<<RXEN0)|(1<<RXCIE0));
-    /* when reception packed is checked and processed */
-    //PckInit(&pck); /* Decommentare per modalità echo */
+    /* when reception packet is checked and processed */
+    responseInit(&rsp, RSP_NACK);
     if(PckCheck(&pck) != 0)
       PckProcess(&pck);
     /* enable transmission and UDR0 empty interrupt */
@@ -287,13 +355,12 @@ ISR(USART0_RX_vect)
 /* UDR0 Empty interrupt service routine */
 ISR(USART0_UDRE_vect)
 {
-  if (RspSend(&rsp, &UDR0)==1||(rsp.index==MAX_WRITE)) //inserire &pck invece di toRead per modalità echo
+  if (RspSend(&rsp, &UDR0)==1||(rsp.index==MAX_SERIAL))
   {
     /* disable transmission and UDR0 empty interrupt */
     UCSR0B &= ~((1<<TXEN0)|(1<<UDRIE0));
     /* when trasmission is complete index is set back to zero (buffer seen as empty) */
-    PckInit(&pck);
-    RspInit(&rsp);
+    packetBufferInit(&pck);
     /* enable reception and RC complete interrupt */
     UCSR0B |= (1<<RXEN0)|(1<<RXCIE0);
   }
@@ -305,26 +372,12 @@ ISR(TIMER5_COMPA_vect)
 {
   if(blinker == 0) // all LED off
   {
-    OCR3BL= ZERO;
-    OCR3CL= ZERO;
-    OCR3AL= ZERO;
-    OCR4AL= ZERO;
-    OCR4BL= ZERO;
-    OCR4CL= ZERO;
-    OCR5AL= ZERO;
-    OCR5CL= ZERO;
+
     blinker= 1;
   }
   else            // all LED on
   {
-    OCR3BL= *(brightnessLED);
-    OCR3CL= *(brightnessLED+1);
-    OCR3AL= *(brightnessLED+2);
-    OCR4AL= *(brightnessLED+3);
-    OCR4BL= *(brightnessLED+4);
-    OCR4CL= *(brightnessLED+5);
-    OCR5AL= *(brightnessLED+6);
-    OCR5CL= *(brightnessLED+7);
+
     blinker= 0;
   }
 }
@@ -332,145 +385,92 @@ ISR(TIMER5_COMPA_vect)
 
 ISR(PCINT0_vect)
 {
-  current_pins= (PINB & SWITCH_MASK1);
+  current_pins= (PINB & SWITCH_MASK);
 
   /* 255= led off(duty cycle=0%), 0= led on max brightness(duty cycle=100%) */
   /*---------------------------pin7 buttons---------------------------------*/
   // increase button
   if( (current_pins&(1<<PB4)) == 0 )
   {
-    if((*(brightnessLED+PIN_7)) > BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_7)-= BUTTON_STEP;
-      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_7)) >0)
-    {
-      *(brightnessLED+PIN_7)= 0;
-      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
-    }
+    if(OCR4BL > BUTTON_STEP)
+      OCR4BL-= BUTTON_STEP;
+    else if(OCR4BL >0)
+      OCR4BL= 0;
   }
   // decrease button
   if( (current_pins&(1<<PB5)) == 0 )
   {
-    if((*(brightnessLED+PIN_7)) < 255-BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_7)+= BUTTON_STEP;
-      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_7)) <255)
-    {
-      *(brightnessLED+PIN_7)= 255;
-      OCR4BL= *(brightnessLED+PIN_7);               // use without timer
-    }
+    if(OCR4BL < 255-BUTTON_STEP)
+      OCR4BL+= BUTTON_STEP;
+    else if(OCR4BL <255)
+      OCR4BL= 255;
   }
-
   /*---------------------------pin8 buttons---------------------------------*/
   // increase button
   if( (current_pins&(1<<PB6)) == 0 )
   {
-    if((*(brightnessLED+PIN_8)) > BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_8)-= BUTTON_STEP;
-      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_8)) >0)
-    {
-      *(brightnessLED+PIN_8)= 0;
-      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
-    }
+    if(OCR4CL > BUTTON_STEP)
+      OCR4CL-= BUTTON_STEP;
+    else if(OCR4CL >0)
+      OCR4CL= 0;
   }
   // decrease button
   if( (current_pins&(1<<PB7)) == 0 )
   {
-    if((*(brightnessLED+PIN_8)) < 255-BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_8)+= BUTTON_STEP;
-      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_8)) <255)
-    {
-      *(brightnessLED+PIN_8)= 255;
-      OCR4CL= *(brightnessLED+PIN_8);               // use without timer
-    }
+    if(OCR4CL < 255-BUTTON_STEP)
+      OCR4CL+= BUTTON_STEP;
+    else if(OCR4CL <255)
+      OCR4CL= 255;
   }
-
   /*----------------------pin46 buttons----------------------------------*/
   // increase button
-
   if( (current_pins&(1<<PB0)) == 0 )
   {
-    if((*(brightnessLED+PIN_46)) > BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_46)-= BUTTON_STEP;
-      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_46)) >0)
-    {
-      *(brightnessLED+PIN_46)= 0;
-      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
-    }
+    if(OCR5AL > BUTTON_STEP)
+      OCR5AL-= BUTTON_STEP;
+    else if(OCR5AL >0)
+      OCR5AL= 0;
   }
   //decrease button
   if( (current_pins&(1<<PB1)) == 0 )
   {
-    if((*(brightnessLED+PIN_46)) < 255-BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_46)+= BUTTON_STEP;
-      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_46)) <255)
-    {
-      *(brightnessLED+PIN_46)= 255;
-      OCR5AL= *(brightnessLED+PIN_46);               // use without timer
-    }
-  }
+    if(OCR5AL < 255-BUTTON_STEP)
+      OCR5AL += BUTTON_STEP;
 
+    else if(OCR5AL <255)
+      OCR5AL= 255;
+  }
   /*---------------------------pin44 buttons---------------------------------*/
   // increase button
   if( (current_pins&(1<<PB2)) == 0 )
   {
-    if((*(brightnessLED+PIN_44)) > BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_44)-= BUTTON_STEP;
-      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_44)) >0)
-    {
-      *(brightnessLED+PIN_44)= 0;
-      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
-    }
+    if(OCR5CL > BUTTON_STEP)
+      OCR5CL-= BUTTON_STEP;
+    else if(OCR5CL >0)
+      OCR5CL= 0;
   }
   // decrease button
   if( (current_pins&(1<<PB3)) == 0 )
   {
-    if((*(brightnessLED+PIN_44)) < 255-BUTTON_STEP)
-    {
-      *(brightnessLED+PIN_44)+= BUTTON_STEP;
-      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
-    }
-    else if((*(brightnessLED+PIN_44)) <255)
-    {
-      *(brightnessLED+PIN_44)= 255;
-      OCR5CL= *(brightnessLED+PIN_44);               // use without timer
-    }
+    if(OCR5CL < 255-BUTTON_STEP)
+      OCR5CL+= BUTTON_STEP;
+    else if(OCR5CL <255)
+      OCR5CL= 255;
   }
-
   _delay_ms(200);                              // help but do not solve bounce contact effect
 }
 
 void switchesInit(void)
 {
-  DDRB &= ~SWITCH_MASK1;      // set SWITCH_MASK1 pins as input
-  PORTB |= SWITCH_MASK1;      // enable pull up resistors
+  DDRB &= ~SWITCH_MASK;      // set SWITCH_MASK pins as input
+  PORTB |= SWITCH_MASK;      // enable pull up resistors
   PCICR |= (1 << PCIE0);        // PCINT7:0 pins can cause an interupt
-  PCMSK0 |= SWITCH_MASK1;     // enabled only pins 0-4
+  PCMSK0 |= SWITCH_MASK;     // enabled only pins 0-4
 }
-
-/*----------------------------------------------> [NOT IN USE]
+/*
 void timerInit(void)
 {
-  // Timer5, CTC, prescaler=1024
+  // Timer2, CTC, prescaler=1024
   TCCR5A = 0;
   TCCR5B = (1 << WGM52) | (1 << CS52) | (1 << CS50);
   // 1 ms will correspond do 15.62 counts
@@ -479,15 +479,13 @@ void timerInit(void)
   TIMSK5 |= (1 << OCIE5A);  // enable the timer interrupt
 }
 */
-
 int main (void)
 {
-  PckInit(&pck);        /* Received Packet initialization */
-  RspInit(&rsp);  /* Response packet init */
+  packetBufferInit(&pck);        /* Received Packet initialization */
+  responseInit(&rsp, RSP_NACK);  /* Response packet init */
   set_sleep_mode(SLEEP_MODE_IDLE);
 
   USART0Init();       /* USART0 initialization */
-  //timerInit();   ---> [NOT IN USE] <---
   switchesInit();
   sei();              /* Enable global interrupts */
   while(1)

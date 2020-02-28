@@ -78,17 +78,33 @@ manovra prima di procedere(vale solo nel caso di porta già occupata).
 Idea:
 aggiungere macchina a stati per descrivere il comportamento del programma.
 
+CMDS PC:
+1- start("HELLO")
+2- setLED(port, value): pwm at port with brightness= value
+3- setPR(port, led*): adc at port, either set a pwm led or a non pwm default led
+4- readPR(port): read adc register
+
+5- removeLED(port): Uninstall a led, disable channel or entire pwm if the last pin on pwm on a given timer
+6- removePR(port): Uninstall a PR, zero all register for adc
+
+0x01c5HELLO
+0x02c2##
+0x03c2##
+0x04c1#
+0x05c1#
+0x06c1#
+
+CMDS Arduino:
+1- ack= Ac10x01
+2- ack= Ac10x02
+3- ack= Ac10x03
+4- ack= Ac20x04## (prima il byte più significativo)
+5- ack= Ac10x05
+6- ack= Ac10x06
+
 
 TO-DO:
-check every pin pwm and buttons poi fare una commit
-
-start invia HELLO & reduce packet max size
-        lato client (start: 8byte, setLED: 5byte(porta,value), setTemp: 6byte(porta,min,max), readings: 4byte(porta))
-        lato controller (start: ack, setLED: ack, setTemp: ack, readings: ack+payload(1byte))
-ack checking
 save
 load (legato ad un if a inizio programma e utilizzabile anche come funzionalità singola)
-implement last functions 4-5
-Arduino part
-  sensore temperatura
-  ADC
+
+ADC con fotoresistore(funzioni 3 e 4)
