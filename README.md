@@ -95,16 +95,19 @@ CMDS PC:
 0x06c1#
 
 CMDS Arduino:
-1- ack= Ac10x01
-2- ack= Ac10x02
-3- ack= Ac10x03
-4- ack= Ac20x04## (prima il byte più significativo)
-5- ack= Ac10x05
-6- ack= Ac10x06
+1- ack= Ac0x01s0
+2- ack= Ac0x02s0
+3- ack= Ac0x03s0
+4- ack= Ac0x04s2## (prima il byte più significativo)
+5- ack= Ac0x05s0
+6- ack= Ac0x06s0
 
+implementate save and load (binary)
+è possibile assegnare più fotoresistori allo stesso led
+se rimuovo un photoresistor il led rimane nell'ultimo stato in cui si trovava prima della rimozione
 
 TO-DO:
-save
-load (legato ad un if a inizio programma e utilizzabile anche come funzionalità singola)
-
-ADC con fotoresistore(funzioni 3 e 4)
+commit
+leggere e scrivere in binario. da rivedere lato PC, arduino forse già lo implementa
+in dataExchange reimpostare try=0
+test valgrind OnPC_client
