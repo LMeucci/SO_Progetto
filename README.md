@@ -109,5 +109,4 @@ se rimuovo un photoresistor il led rimane nell'ultimo stato in cui si trovava pr
 TO-DO:
 commit
 leggere e scrivere in binario. da rivedere lato PC, arduino forse già lo implementa
-in dataExchange reimpostare try=0
 test valgrind OnPC_client

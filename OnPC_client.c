@@ -286,7 +286,7 @@ void pckInit(SmartHouse *sh)
 
 int dataExchange(SmartHouse *sh, unsigned char command, unsigned char size, unsigned char* payload)
 {
-	int try=10;
+	int try=0;
 	retry:
 		if(pckSend(sh,command,size,payload) != 0)
 		{
@@ -324,9 +324,9 @@ void printMenu(SmartHouse *sh)
 	printf("    3- Install a photoresistor\n");
 	printf("    4- Get a reading from an installed photoresistor\n");
 	printf("    5- Uninstall a LED\n");
-	printf("    6- Uninstall a photoresistor\n");
+	printf("    6- Uninstall a photoresistor\n\n");
 
-	printf("    9- Restart the configuration process(all data will be lost)\n");
+	printf("    9- Restart the configuration process\n");
 	printf("    0- Exit the application\n\n");
 }
 
@@ -440,7 +440,7 @@ int setPR(SmartHouse *sh)
 		printf("    Pin chosen: ");
 		filterInput(ledPin,sizeof(ledPin));
 		ledPin[0]-= CHAR_TO_HEX;
-	}while(((*ledPin) >8) || ((*ledPin) <1));
+	}while(((*ledPin) >8) || ((*ledPin) <0));
 	printf("\n");
 
 	if( ((*ledPin) <8) && (sh->devLED[(int)(*ledPin)] != LED) )
@@ -498,7 +498,7 @@ int getPRreading(SmartHouse *sh)
 	valueRead |= sh->lastPckReceived[5];
 	valueRead <<= 8;
 	valueRead |= sh->lastPckReceived[4];
-	printf("\n    Current photoresistor value on the adc pin[%x]: %hu\n\n",pins[0][(int)(*pin)],valueRead);
+	printf("\n    Current photoresistor value on the adc pin[%x]: %hu\n\n",(unsigned char)pins[0][(int)(*pin)],valueRead);
 	/* erase last packet sent & last packet received, current task is complete */
 	pckInit(sh);
 	return 0;

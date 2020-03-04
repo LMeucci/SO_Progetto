@@ -79,7 +79,6 @@ uint8_t pinsPWM= 0;
 uint8_t pinsADC= 0;
 uint8_t pinsADCtoLED[MAX_DEVICES]= {0};
 volatile uint16_t adcReadings[MAX_DEVICES]= {0};
-volatile uint8_t adcReadingsIndex= 0;
 
 /* Packets initialization(erasing) */
 void packetBufferInit(Packet *pck)
@@ -244,33 +243,34 @@ void photoresistorSetup(uint8_t pin, uint8_t led, Packet *rsp)
   if( pinsADC == 0 )
   {
     // AREF = AVcc (5V)
-    ADMUX= (1<<REFS0);
+    ADMUX = (1<<REFS0);
     // ADC enable, prescaler=128 16000000/128 = 125000 Hz
     ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
     timerADCInit();
   }
   pinsADC |= (1<<pin);
   pinsADCtoLED[pin]= led;
+
   // INIZIO TEST
-  ADCSRA |= (1<<ADSC);
-  while(ADCSRA & (1<<ADSC));
-  uint16_t result= 0;
-  result = ADCH;
-  result <<= 8;
-  result |= ADCL;
-  uint8_t brightness= (uint8_t)(result/4);
-  if(brightness < 150)
+//  ADCSRA |= (1<<ADSC);
+//  while(ADCSRA & (1<<ADSC));
+//  uint8_t brightness= (uint8_t)(ADC/4);
+  //OCR1BL= 255-brightness;
+/*
+  if(brightness < 145)
     PORTB |= PIN_ADC_DEFAULT_MASK;
   else
     PORTB &= ~(PIN_ADC_DEFAULT_MASK);
+*/
   // FINE TEST
 
   rsp->buffer[2]= CMD_PR_SETUP;
   rsp->buffer[3]= CMD_PR_SETUP_SIZE;
+//  adcReadings[0]= brightness;
   // RISULTATI TEST
-  rsp->buffer[4]= ADCL;
-  rsp->buffer[5]= ADCH;
-  rsp->buffer[6]= brightness;
+//  rsp->buffer[4]= ADCL;
+//  rsp->buffer[5]= ADCH;
+//  rsp->buffer[6]= brightness;
   // FINE RISULTATI TEST
 }
 
@@ -536,15 +536,12 @@ ISR(USART0_UDRE_vect)
 }
 /*---------------------------------------------------------------------------------------------*/
 
-ISR(ADC_vect)
-{
-  uint16_t result= 0;
-  result = ADCH;
-  result <<= 8;
-  result |= ADCL;
-  adcReadings[adcReadingsIndex]= result;
+//ISR(ADC_vect)
+/*{
+  //adcReadings[adcReadingsIndex]= ADC;
   // result range 0-1023, brightness range 0-255, division by 4 adjust result in a trivial way
-  uint8_t brightness= (uint8_t)(result/4);
+  uint8_t brightness= (uint8_t)(ADC/4);
+  //brightness= brightness; // need to invert read value
   switch(pinsADCtoLED[adcReadingsIndex])
   {
     case PIN_2:
@@ -572,13 +569,13 @@ ISR(ADC_vect)
       OCR1BL= brightness;
       break;
     case PIN_ADC_DEFAULT:
-      if(brightness < 150)
+      if(brightness < 145)
         PORTB |= PIN_ADC_DEFAULT_MASK;
       else
         PORTB &= ~(PIN_ADC_DEFAULT_MASK);
       break;
   }
-}
+}*/
 
 ISR(TIMER2_COMPA_vect)
 {
@@ -588,46 +585,86 @@ ISR(TIMER2_COMPA_vect)
 
   // adc read only once every 15sec
   timerAuxCompare++;
-  if(timerAuxCompare < TIMER_QUARTER_MINUTE) reti();
-  else timerAuxCompare= 0;
-
-  int pin;
-  for(pin=0; pin<MAX_DEVICES; pin++)
+  if(timerAuxCompare == TIMER_QUARTER_MINUTE)
   {
-    // check if a photoresistor is setup at pin
-    if( ((pinsADC)&(1<<pin)) != 0)
+    timerAuxCompare= 0;
+
+    int pin;
+    for(pin=0; pin<MAX_DEVICES; pin++)
     {
-      switch(pin)
+      // check if a photoresistor is setup at pin
+      if( ((pinsADC)&(1<<pin)) != 0)
       {
-        case ADC0:
-          break;
-        case ADC1:
-          ADMUX = (1<<MUX0);
-          break;
-        case ADC2:
-          ADMUX = (1<<MUX1);
-          break;
-        case ADC3:
-          ADMUX = (1<<MUX1)|(1<<MUX0);
-          break;
-        case ADC4:
-          ADMUX = (1<<MUX2);
-          break;
-        case ADC5:
-          ADMUX = (1<<MUX2)|(1<<MUX0);
-          break;
-        case ADC6:
-          ADMUX = (1<<MUX2)|(1<<MUX1);
-          break;
-        case ADC7:
-          ADMUX = (1<<MUX2)|(1<<MUX1)|(1<<MUX0);
-          break;
+        ADMUX = (ADMUX & 0xF8); // clearing last 3 bits before ORing
+        switch(pin)
+        {
+          case ADC0:
+            break;
+          case ADC1:
+            ADMUX |= (1<<MUX0);
+            break;
+          case ADC2:
+            ADMUX |= (1<<MUX1);
+            break;
+          case ADC3:
+            ADMUX |= (1<<MUX1)|(1<<MUX0);
+            break;
+          case ADC4:
+            ADMUX |= (1<<MUX2);
+            break;
+          case ADC5:
+            ADMUX |= (1<<MUX2)|(1<<MUX0);
+            break;
+          case ADC6:
+            ADMUX |= (1<<MUX2)|(1<<MUX1);
+            break;
+          case ADC7:
+            ADMUX |= (1<<MUX2)|(1<<MUX1)|(1<<MUX0);
+            break;
+          }
+        // start single conversion for selected pin, write 1 to ADSC
+        ADCSRA |= (1<<ADSC);
+        // wait for conversion to complete
+        while(ADCSRA & (1<<ADSC));
+        adcReadings[pin]= ADC;
+        // ADC range 0-1023, brightness range 0-255, division by 4 adjust result in a trivial way
+        int brightnessLevel= (ADC/4);
+        // trim brightness according to daylight values registered(light off)
+        brightnessLevel= ((brightnessLevel+70)>255)? 255 : brightnessLevel+70;
+        switch(pinsADCtoLED[pin])
+        {
+          case PIN_2:
+            OCR3BL= brightnessLevel;
+            break;
+          case PIN_3:
+            OCR3CL= brightnessLevel;
+            break;
+          case PIN_5:
+            OCR3AL= brightnessLevel;
+            break;
+          case PIN_6:
+            OCR4AL= brightnessLevel;
+            break;
+          case PIN_7:
+            OCR4BL= brightnessLevel;
+            break;
+          case PIN_8:
+            OCR4CL= brightnessLevel;
+            break;
+          case PIN_11:
+            OCR1AL= brightnessLevel;
+            break;
+          case PIN_12:
+            OCR1BL= brightnessLevel;
+            break;
+          case PIN_ADC_DEFAULT:
+            if(brightnessLevel < 240) // dayight trigger
+              PORTB |= PIN_ADC_DEFAULT_MASK;
+            else
+              PORTB &= ~(PIN_ADC_DEFAULT_MASK);
+            break;
+        }
       }
-      // start single conversion for selected pin, write 1 to ADSC
-      adcReadingsIndex= pin;
-      ADCSRA |= (1<<ADSC);
-      // wait for conversion to complete
-      while(ADCSRA & (1<<ADSC));
     }
   }
 }
