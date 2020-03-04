@@ -24,5 +24,8 @@ $(TARGET): $(OBJ)
 execute:
 	./$(TARGET)
 
+memtest:
+	valgrind --tool=memcheck --leak-check=full --track-origins=yes ./$(TARGET)
+
 clean:
 	rm -rf *.o *.~ $(BINS)

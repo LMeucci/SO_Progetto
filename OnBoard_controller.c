@@ -66,21 +66,22 @@ Packet pck;
 /* Packet transmitted (response) */
 Packet rsp;
 
-
+// timer2 variables (used in adc reading)
 const uint16_t timer_duration_ms= 10;
 volatile uint16_t timerAuxCompare= 0;
 
 /* pins used to handle switches */
 volatile uint8_t current_pins;
 
-// helps handling pwm shut down
+// keeps track of pwm pins in use, used to implement ledRemove
 uint8_t pinsPWM= 0;
-// helps handling adc
+// keep track of adc pins in use and led ports associated to them
 uint8_t pinsADC= 0;
 uint8_t pinsADCtoLED[MAX_DEVICES]= {0};
+// keep track of adc readings, used from photoresistorReading to send stored values
 volatile uint16_t adcReadings[MAX_DEVICES]= {0};
 
-/* Packets initialization(erasing) */
+/*-----------------------------Initialization functions----------------------------------- */
 void packetBufferInit(Packet *pck)
 {
   pck->index=0;    /* starting empty buffer location */
@@ -111,35 +112,22 @@ void timerADCInit(void)
   sei();
 }
 
-void rspChecksum(Packet *rsp)
+void switchesInit(void)
 {
-  /* "adding" size-only checksum to size with bitstealing(3bits) */
-  uint8_t size= rsp->buffer[3];
-  uint8_t sizeControl= 0;
-	uint8_t temp= size;
-	uint8_t k;
-	for(k=0; k<5; k++)
-	{
-		sizeControl += temp&1;      // counting 1 bits among the first 5 bits of size
-		temp>>=1;
-	}
-	size <<= 3;                  // space for sizeControl bits
-	size |= sizeControl;
-  uint8_t sizeCopy= rsp->buffer[3]; // saving size for checksum processing
-  rsp->buffer[3]= size;
-
-  /* checksum processed and added to the response */
-  uint16_t csum= 0;
-  // ack+cmd+size
-	csum += rsp->buffer[0]+rsp->buffer[2]+rsp->buffer[3];
-	uint8_t i;
-	for(i=0; i<sizeCopy; i++)
-		csum += rsp->buffer[i+4];         // Checksum processing (no carry)
-
-	if(csum>>8) csum++;                 // Checksum carry added if present
-  rsp->buffer[1]= (uint8_t)csum;      // Little endian system (ATMega 2560)
+  DDRK &= ~SWITCH_MASK;      // set SWITCH_MASK pins as input
+  PORTK |= SWITCH_MASK;      // enable pull up resistors
+  cli();
+  PCICR |= (1 << PCIE2);     // PCINT23:16 pins can cause an interupt
+  PCMSK2 |= SWITCH_MASK;     // enabled all 8 pins
+  sei();
 }
 
+void adcDefaultPinInit(void)
+{
+  DDRB |= PIN_ADC_DEFAULT_MASK; // pin 13 (led pin) set as output
+}
+
+/*-----------------------------Board functionalities---------------------------------------*/
 void start(Packet *pck, Packet *rsp)
 {
   /* check handshake */
@@ -251,31 +239,13 @@ void photoresistorSetup(uint8_t pin, uint8_t led, Packet *rsp)
   pinsADC |= (1<<pin);
   pinsADCtoLED[pin]= led;
 
-  // INIZIO TEST
-//  ADCSRA |= (1<<ADSC);
-//  while(ADCSRA & (1<<ADSC));
-//  uint8_t brightness= (uint8_t)(ADC/4);
-  //OCR1BL= 255-brightness;
-/*
-  if(brightness < 145)
-    PORTB |= PIN_ADC_DEFAULT_MASK;
-  else
-    PORTB &= ~(PIN_ADC_DEFAULT_MASK);
-*/
-  // FINE TEST
-
   rsp->buffer[2]= CMD_PR_SETUP;
   rsp->buffer[3]= CMD_PR_SETUP_SIZE;
-//  adcReadings[0]= brightness;
-  // RISULTATI TEST
-//  rsp->buffer[4]= ADCL;
-//  rsp->buffer[5]= ADCH;
-//  rsp->buffer[6]= brightness;
-  // FINE RISULTATI TEST
 }
 
 void photoresistorReading(uint8_t pin, Packet *rsp)
 {
+  /* preparing response packet */
   rsp->buffer[2]= CMD_PR_READING;
   rsp->buffer[3]= CMD_PR_READING_SIZE;
   rsp->buffer[4]= (uint8_t) adcReadings[pin];
@@ -372,15 +342,18 @@ void ledRemove(uint8_t pin, Packet *rsp)
       OCR1B= 0;
       break;
   }
+  /* removing pin from variable which keeps track of all pins in use */
   pinsPWM &= ~(1<<pin);
+  /* preparing response packet */
   rsp->buffer[2]= CMD_REMOVE_LED;
   rsp->buffer[3]= CMD_REMOVE_LED_SIZE;
 }
 
 void photoresistorRemove(uint8_t pin, Packet *rsp)
 {
+  /* removing pin from variable which keeps track of all pins in use */
   pinsADC &= ~(1<<pin);
-  pinsADCtoLED[pin]= 0;
+  pinsADCtoLED[pin]= 0; // removing port associated to pin
   if(pinsADC == 0)
   {
     // disable ADC
@@ -393,10 +366,12 @@ void photoresistorRemove(uint8_t pin, Packet *rsp)
     TCCR2B= 0;
     OCR2A= 0;
   }
-
+  /* preparing response packet */
   rsp->buffer[2]= CMD_REMOVE_PR;
   rsp->buffer[3]= CMD_REMOVE_PR_SIZE;
 }
+
+/*---------------------------Packets Handling (received and response)-----------------------*/
 
 /* if the packet is valid return 0 and allows its processing */
 uint8_t pckCheck(Packet *pck)
@@ -478,6 +453,35 @@ uint8_t pckReceive(Packet *pck, uint8_t u8data)
   else return 1;
 }
 
+void rspChecksum(Packet *rsp)
+{
+  /* "adding" size-only checksum to size with bitstealing(3bits) */
+  uint8_t size= rsp->buffer[3];
+  uint8_t sizeControl= 0;
+	uint8_t temp= size;
+	uint8_t k;
+	for(k=0; k<5; k++)
+	{
+		sizeControl += temp&1;      // counting 1 bits among the first 5 bits of size
+		temp>>=1;
+	}
+	size <<= 3;                  // space for sizeControl bits
+	size |= sizeControl;
+  uint8_t sizeCopy= rsp->buffer[3]; // saving size for checksum processing
+  rsp->buffer[3]= size;
+
+  /* checksum processed and added to the response */
+  uint16_t csum= 0;
+  // ack+cmd+size
+	csum += rsp->buffer[0]+rsp->buffer[2]+rsp->buffer[3];
+	uint8_t i;
+	for(i=0; i<sizeCopy; i++)
+		csum += rsp->buffer[i+4];         // Checksum processing (no carry)
+
+	if(csum>>8) csum++;                 // Checksum carry added if present
+  rsp->buffer[1]= (uint8_t)csum;      // Little endian system (ATMega 2560)
+}
+
 /* read from buffer routine */
 uint8_t rspSend(Packet *pck, volatile uint8_t *u8data)
 {
@@ -534,48 +538,8 @@ ISR(USART0_UDRE_vect)
     UCSR0B |= (1<<RXEN0)|(1<<RXCIE0);
   }
 }
-/*---------------------------------------------------------------------------------------------*/
 
-//ISR(ADC_vect)
-/*{
-  //adcReadings[adcReadingsIndex]= ADC;
-  // result range 0-1023, brightness range 0-255, division by 4 adjust result in a trivial way
-  uint8_t brightness= (uint8_t)(ADC/4);
-  //brightness= brightness; // need to invert read value
-  switch(pinsADCtoLED[adcReadingsIndex])
-  {
-    case PIN_2:
-      OCR3BL= brightness;
-      break;
-    case PIN_3:
-      OCR3CL= brightness;
-      break;
-    case PIN_5:
-      OCR3AL= brightness;
-      break;
-    case PIN_6:
-      OCR4AL= brightness;
-      break;
-    case PIN_7:
-      OCR4BL= brightness;
-      break;
-    case PIN_8:
-      OCR4CL= brightness;
-      break;
-    case PIN_11:
-      OCR1AL= brightness;
-      break;
-    case PIN_12:
-      OCR1BL= brightness;
-      break;
-    case PIN_ADC_DEFAULT:
-      if(brightness < 145)
-        PORTB |= PIN_ADC_DEFAULT_MASK;
-      else
-        PORTB &= ~(PIN_ADC_DEFAULT_MASK);
-      break;
-  }
-}*/
+/*----------------------------Other interrupt service routines--------------------------------*/
 
 ISR(TIMER2_COMPA_vect)
 {
@@ -744,21 +708,6 @@ ISR(PCINT2_vect)
       OCR1BL= 255;
   }
   _delay_ms(200);            // help with but do not solve bounce contact effect
-}
-
-void switchesInit(void)
-{
-  DDRK &= ~SWITCH_MASK;      // set SWITCH_MASK pins as input
-  PORTK |= SWITCH_MASK;      // enable pull up resistors
-  cli();
-  PCICR |= (1 << PCIE2);     // PCINT23:16 pins can cause an interupt
-  PCMSK2 |= SWITCH_MASK;     // enabled all 8 pins
-  sei();
-}
-
-void adcDefaultPinInit(void)
-{
-  DDRB |= PIN_ADC_DEFAULT_MASK; // pin 13 (led pin) set as output
 }
 
 

@@ -107,6 +107,5 @@ implementate save and load (binary)
 se rimuovo un photoresistor il led rimane nell'ultimo stato in cui si trovava prima della rimozione
 
 TO-DO:
-commit
-leggere e scrivere in binario. da rivedere lato PC, arduino forse già lo implementa
+debounce effect e proper timing per letture ADC (15sec)
 test valgrind OnPC_client
