@@ -38,18 +38,20 @@
 #define PIN_ADC_DEFAULT_MASK 0x80
 
 #define CMD_START 0x01
-#define CMD_LED_SETUP 0x02
-#define CMD_PR_SETUP 0x03
-#define CMD_PR_READING 0x04
-#define CMD_REMOVE_LED 0x05
-#define CMD_REMOVE_PR 0x06
+#define CMD_RESET 0x02
+#define CMD_LED_SETUP 0x03
+#define CMD_PR_SETUP 0x04
+#define CMD_PR_READING 0x05
+#define CMD_REMOVE_LED 0x06
+#define CMD_REMOVE_PR 0x07
 
-#define CMD_START_SIZE 0x00
-#define CMD_LED_SETUP_SIZE 0x00
-#define CMD_PR_SETUP_SIZE 0x00
-#define CMD_PR_READING_SIZE 0x02
-#define CMD_REMOVE_LED_SIZE 0x00
-#define CMD_REMOVE_PR_SIZE 0x00
+#define CMD_START_SIZE 0x05
+#define CMD_RESET_SIZE 0x00
+#define CMD_LED_SETUP_SIZE 0x02
+#define CMD_PR_SETUP_SIZE 0x02
+#define CMD_PR_READING_SIZE 0x01
+#define CMD_REMOVE_LED_SIZE 0x01
+#define CMD_REMOVE_PR_SIZE 0x01
 
 #define RSP_ACK 0x41
 #define RSP_NACK 0x4E
@@ -147,6 +149,46 @@ void start(Packet *pck, Packet *rsp)
   }
 }
 
+void reset(Packet *rsp)
+{
+  // disabling all pwm pins
+  pinsPWM= 0;
+
+  TCCR3A= 0; TCCR3B= 0;
+  DDRE &= ~((1<<PE3)|(1<<PE4)|(1<<PE5));
+  OCR3A= 0; OCR3B= 0; OCR3C= 0;
+
+  TCCR4A= 0; TCCR4B= 0;
+  DDRH &= ~((1<<PH3)|(1<<PH4)|(1<<PH5));
+  OCR4A= 0; OCR4B= 0; OCR4C= 0;
+
+  TCCR1A= 0; TCCR1B= 0;
+  DDRB &= ~((1<<PB5)|(1<<PB6));
+  OCR1A= 0; OCR1B= 0;
+
+  // disabling adc
+  pinsADC= 0;
+  int i;
+  for(i=0; i<MAX_DEVICES; i++)
+  {
+    pinsADCtoLED[i]= 0;
+    adcReadings[i]= 0;
+  }
+
+  ADMUX= 0;
+  ADCSRA= 0;
+  // disable timer2 associated with adc
+  cli();
+  TIMSK2= 0;
+  sei();
+  TCCR2B= 0;
+  OCR2A= 0;
+
+  /* reset response packet */
+  rsp->buffer[2]= CMD_RESET;
+  rsp->buffer[3]= CMD_RESET_SIZE;
+}
+
 void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
 {
   /*---------pin mapping:-------------
@@ -164,6 +206,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR3BH= 0;
       OCR3BL= brightness;
       break;
+
     case PIN_3:
       /* timer3, channel C (pin3) Fast PWM, non inverted, 8bit */
       TCCR3A |= (1<<COM3C1) | (1<<COM3C0) | (1<<WGM30);
@@ -172,6 +215,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR3CH= 0;
       OCR3CL= brightness;
       break;
+
     case PIN_5:
       /* timer3, channel A (pin5) Fast PWM, non inverted, 8bit */
       TCCR3A |= (1<<COM3A1) | (1<<COM3A0) | (1<<WGM30);
@@ -180,6 +224,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR3AH= 0;
       OCR3AL= brightness;
       break;
+
     case PIN_6:
       /* timer4, channel A (pin6) Fast PWM, non inverted, 8bit */
       TCCR4A |= (1<<COM4A1) | (1<<COM4A0) | (1<<WGM40);
@@ -188,6 +233,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR4AH= 0;
       OCR4AL= brightness;
       break;
+
     case PIN_7:
       /* timer4, channel B (pin7) Fast PWM, non inverted, 8bit */
       TCCR4A |= (1<<COM4B1) | (1<<COM4B0) | (1<<WGM40);
@@ -196,6 +242,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR4BH= 0;
       OCR4BL= brightness;
       break;
+
     case PIN_8:
       /* timer4, channel C (pin8) Fast PWM, non inverted, 8bit */
       TCCR4A |= (1<<COM4C1) | (1<<COM4C0) | (1<<WGM40);
@@ -204,6 +251,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR4CH= 0;
       OCR4CL= brightness;
       break;
+
     case PIN_11:
       /* timer1, channel A (pin11), Fast PWM, non inverted, 8bit */
       TCCR1A |= (1<<COM1A1) | (1<<COM1A0) | (1<<WGM10); //
@@ -212,6 +260,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
       OCR1AH= 0;
       OCR1AL= brightness;
       break;
+
     case PIN_12:
       /* timer1, channel B (pin12), Fast PWM, non inverted, 8bit */
       TCCR1A |= (1<<COM1B1) | (1<<COM1B0) | (1<<WGM10);
@@ -257,87 +306,73 @@ void ledRemove(uint8_t pin, Packet *rsp)
   switch(pin)
   {
     case PIN_2:
-      if( (pinsPWM&(0x06)) == 0 ) // pin 3 & 5 are not in use
-      {
-        // disable pwm and timer3
-        TCCR3A |= (1<<WGM30);
-        TCCR3B |= (1<<WGM32) | (1<<CS30);
-      }
-      // disable only channel associated with pin
-      TCCR3A |= (1<<COM3B1) | (1<<COM3B0);
+      if( (pinsPWM&(0x06)) == 0 ) // pin 3 & 5 are not in use, disable pwm bound to timer 3
+        { TCCR3A= 0; TCCR3B= 0; }
+      else                        // disable only channel associated with pin
+        { TCCR3A &= ~((1<<COM3B1) | (1<<COM3B0)); }
       DDRE &= ~(1<<PE4);  // output pin disabled
       OCR3B= 0;
       break;
+
     case PIN_3:
-      if( (pinsPWM&(0x05)) == 0 ) // pin 2 & 5 are not in use
-      {
-        TCCR3A |= (1<<WGM30);
-        TCCR3B |= (1<<WGM32) | (1<<CS30);
-      }
-      TCCR3A |= (1<<COM3C1) | (1<<COM3C0);
+      if( (pinsPWM&(0x05)) == 0 ) // pin 2 & 5 are not in use, disable pwm bound to timer 3
+        { TCCR3A= 0; TCCR3B= 0; }
+      else
+        { TCCR3A &= ~((1<<COM3C1) | (1<<COM3C0)); }
       DDRE &= ~(1<<PE5);
       OCR3C= 0;
       break;
+
     case PIN_5:
-      if( (pinsPWM&(0x03)) == 0 ) // pin 2 & 3 are not in use
-      {
-        TCCR3A |= (1<<WGM30);
-        TCCR3B |= (1<<WGM32) | (1<<CS30);
-      }
-      TCCR3A |= (1<<COM3A1) | (1<<COM3A0);
+      if( (pinsPWM&(0x03)) == 0 ) // pin 2 & 3 are not in use, disable pwm bound to timer 3
+        { TCCR3A= 0; TCCR3B= 0; }
+      else
+        { TCCR3A &= ~((1<<COM3A1) | (1<<COM3A0)); }
       DDRE &= ~(1<<PE3);
       OCR3A= 0;
       break;
+
     case PIN_6:
-      if( (pinsPWM&(0x30)) == 0 ) // pin 7 & 8 are not in use
-      {
-        TCCR4A |= (1<<WGM40);
-        TCCR4B |= (1<<WGM42) | (1<<CS40);
-      }
-      TCCR4A |= (1<<COM4A1) | (1<<COM4A0);
+      if( (pinsPWM&(0x30)) == 0 ) // pin 7 & 8 are not in use, disable pwm bound to timer 4
+        { TCCR4A= 0; TCCR4B= 0; }
+      else
+        { TCCR4A &= ~((1<<COM4A1) | (1<<COM4A0)); }
       DDRH &= ~(1<<PH3);
       OCR4A= 0;
       break;
+
     case PIN_7:
-      if( (pinsPWM&(0x28)) == 0 ) // pins 6 & 8 are not in use
-      {
-        TCCR4A |= (1<<WGM40);
-        TCCR4B |= (1<<WGM42) | (1<<CS40);
-      }
-      TCCR4A |= (1<<COM4B1) | (1<<COM4B0);
+      if( (pinsPWM&(0x28)) == 0 ) // pins 6 & 8 are not in use, disable pwm bound to timer 4
+        { TCCR4A= 0; TCCR4B= 0; }
+      else
+      { TCCR4A &= ~((1<<COM4B1) | (1<<COM4B0)); }
       DDRH &= ~(1<<PH4);
       OCR4B= 0;
       break;
+
     case PIN_8:
-      /* timer4, channel C (pin8)  */
-      if( (pinsPWM&(0x18)) == 0 ) // pins 6 & 7 are not in use
-      {
-        TCCR4A |= (1<<WGM40);
-        TCCR4B |= (1<<WGM42) | (1<<CS40);
-      }
-      TCCR4A |= (1<<COM4C1) | (1<<COM4C0);
+      if( (pinsPWM&(0x18)) == 0 ) // pins 6 & 7 are not in use, disable pwm bound to timer 4
+        { TCCR4A= 0; TCCR4B= 0; }
+      else
+      { TCCR4A &= ~((1<<COM4C1) | (1<<COM4C0)); }
       DDRH &= ~(1<<PH5);
       OCR4C= 0;
       break;
+
     case PIN_11:
-      /* timer1, channel A (pin11), Fast PWM, non inverted, 8bit */
-      if( (pinsPWM&(0x80)) == 0) // pin 12 is not in use
-      {
-        TCCR1A |= (1<<WGM10);
-        TCCR1B |= (1<<WGM12) | (1<<CS10);
-      }
-      TCCR1A |= (1<<COM1A1) | (1<<COM1A0);
+      if( (pinsPWM&(0x80)) == 0) // pin 12 is not in use, disable pwm bound to timer 1
+        { TCCR1A= 0; TCCR1B= 0; }
+      else
+      { TCCR1A &= ~((1<<COM1A1) | (1<<COM1A0)); }
       DDRB &= ~(1<<PB5);
       OCR1A= 0;
       break;
+
     case PIN_12:
-      /* timer1, channel B (pin12), Fast PWM, non inverted, 8bit */
-      if( (pinsPWM&(0x40)) == 0) // pin 11 is not in use
-      {
-        TCCR1A |= (1<<WGM10);
-        TCCR1B |= (1<<WGM12) | (1<<CS10);
-      }
-      TCCR1A |= (1<<COM1B1) | (1<<COM1B0);
+      if( (pinsPWM&(0x40)) == 0) // pin 11 is not in use, disable pwm bound to timer 1
+        { TCCR1A= 0; TCCR1B= 0; }
+      else
+      { TCCR1A &= ~((1<<COM1B1) | (1<<COM1B0)); }
       DDRB &= ~(1<<PB6);
       OCR1B= 0;
       break;
@@ -414,27 +449,31 @@ void pckProcess(Packet *pck, Packet *rsp)
   switch(cmd)
   {
     case 1:
-      // handle start()
+      // handle start
       start(pck,rsp);
       break;
     case 2:
+      // handle reset
+      reset(rsp);
+      break;
+    case 3:
       // handle led setup
       ledSetup(pck->buffer[3],pck->buffer[4],rsp);
       break;
-    case 3:
+    case 4:
       // handle photoresistor setup
       photoresistorSetup(pck->buffer[3],pck->buffer[4],rsp);
       break;
-    case 4:
+    case 5:
       // handle photoresistor reading
       photoresistorReading(pck->buffer[3],rsp);
       break;
-    case 5:
+    case 6:
       // handle remove led
       ledRemove(pck->buffer[3],rsp);
       break;
-    case 6:
-      //handle remove photoresistor
+    case 7:
+      // handle remove photoresistor
       photoresistorRemove(pck->buffer[3],rsp);
       break;
   }

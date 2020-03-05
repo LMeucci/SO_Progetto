@@ -24,13 +24,15 @@
 #define LED 0x4C
 
 #define CMD_START 0x01
-#define CMD_LED_SETUP 0x02
-#define CMD_PR_SETUP 0x03
-#define CMD_PR_READING 0x04
-#define CMD_REMOVE_LED 0x05
-#define CMD_REMOVE_PR 0x06
+#define CMD_RESET 0x02
+#define CMD_LED_SETUP 0x03
+#define CMD_PR_SETUP 0x04
+#define CMD_PR_READING 0x05
+#define CMD_REMOVE_LED 0x06
+#define CMD_REMOVE_PR 0x07
 
 #define CMD_START_SIZE 0x05
+#define CMD_RESET_SIZE 0x00
 #define CMD_LED_SETUP_SIZE 0x02
 #define CMD_PR_SETUP_SIZE 0x02
 #define CMD_PR_READING_SIZE 0x01
@@ -411,6 +413,7 @@ int setLED(SmartHouse *sh)
 	pckInit(sh);
 	/* register new LED */
 	sh->devLED[(int)*pin]= LED;
+	printf("\n    Operation performed successfully!\n\n");
 	return 0;
 }
 
@@ -464,6 +467,7 @@ int setPR(SmartHouse *sh)
 	pckInit(sh);
 	/* register new photoresistor */
 	sh->devPR[(int)(*pin)]= PHOTORESISTOR;
+	printf("\n    Operation performed successfully!\n\n");
 	return 0;
 }
 
@@ -501,6 +505,7 @@ int getPRreading(SmartHouse *sh)
 	printf("\n    Current photoresistor value on the adc pin[%x]: %hu\n\n",(unsigned char)pins[0][(int)(*pin)],valueRead);
 	/* erase last packet sent & last packet received, current task is complete */
 	pckInit(sh);
+	printf("\n    Operation performed successfully!\n\n");
 	return 0;
 }
 
@@ -528,6 +533,7 @@ int removeLED(SmartHouse *sh)
 	pckInit(sh);
 	/* unregister old LED */
 	sh->devLED[(int)*pin]= NO_DEV;
+	printf("\n    Operation performed successfully!\n\n");
 	return 0;
 }
 
@@ -555,6 +561,7 @@ int removePR(SmartHouse *sh)
 	pckInit(sh);
 	/* unregister old photoresistor */
 	sh->devPR[(int)(*pin)]= NO_DEV;
+	printf("\n    Operation performed successfully!\n\n");
 	return 0;
 }
 
@@ -578,6 +585,20 @@ int start(SmartHouse *sh)
 	if(dataExchange(sh,CMD_START,CMD_START_SIZE,(unsigned char*)"HELLO") != 0)
 	{
 		printf("\n ERROR during data exchange, command[%x]\n",CMD_START);
+		return -1;
+	}
+	/* erase last packet sent & last packet received, current task is complete */
+	pckInit(sh);
+	return 0;
+}
+
+int reset(SmartHouse *sh)
+{
+	/* send reset packet */
+	if(dataExchange(sh,CMD_RESET,CMD_RESET_SIZE,'\0') != 0)
+	{
+		printf("\n ERROR during data exchange, command[%x]\n",CMD_START);
+		return -1;
 	}
 	/* erase last packet sent & last packet received, current task is complete */
 	pckInit(sh);
@@ -619,63 +640,6 @@ int save(SmartHouse *sh)
 		printf("    DONE.\n\n");
 	}
 	return 0;
-}
-
-/* Perform selected action */
-int selectAction(SmartHouse *sh, char action)
-{
-	switch(action)
-	{
-		case 1:
-			queryChannels(sh);
-			return 0;
-		case 2:
-			if(setLED(sh) != 0)
-			{
-				printf("\n ERROR encountered during setLED()\n\n");
-			}
-			return 0;
-		case 3:
-			if(setPR(sh) != 0)
-			{
-				printf("\n ERROR encountered during setPR()\n\n");
-			}
-			return 0;
-		case 4:
-			if(getPRreading(sh) != 0)
-			{
-				printf("\n ERROR encountered during getPRreading()\n\n");
-			}
-			return 0;
-		case 5:
-			if(removeLED(sh) != 0)
-			{
-				printf("\n ERROR encountered during removeLED()\n\n");
-			}
-			return 0;
-		case 6:
-			if(removePR(sh) != 0)
-			{
-				printf("\n ERROR encountered during removePR()\n\n");
-			}
-			return 0;
-		case 9:
-			if(start(sh) != 0)
-			{
-				printf("\n ERROR encountered during start()\n\n");
-			}
-			return 0;
-		case 0:
-			if(save(sh) != 0)
-			{
-				printf("\n ERROR encountered during save()\n\n");
-			}
-			exit(0);
-
-		default:
-			printf(" ERROR invalid input, select one of the available actions (1-5)\n\n");
-			return -1;
-	}
 }
 
 int load(SmartHouse *sh)
@@ -720,6 +684,11 @@ int load(SmartHouse *sh)
 		}
 		else
 		{
+			if( reset(sh) != 0)
+			{
+				printf(" ERROR impossible to reset the controller\n\n");
+				return -1;
+			}
 			if(start(sh) != 0)
 			{
 				printf("\n ERROR during start()\n\n");
@@ -729,6 +698,70 @@ int load(SmartHouse *sh)
 	}
 
 	return 0;
+}
+
+/* Perform selected action */
+int selectAction(SmartHouse *sh, char action)
+{
+	switch(action)
+	{
+		case 1:
+			queryChannels(sh);
+			return 0;
+		case 2:
+			if(setLED(sh) != 0)
+			{
+				printf("\n ERROR encountered during setLED()\n\n");
+			}
+			return 0;
+		case 3:
+			if(setPR(sh) != 0)
+			{
+				printf("\n ERROR encountered during setPR()\n\n");
+			}
+			return 0;
+		case 4:
+			if(getPRreading(sh) != 0)
+			{
+				printf("\n ERROR encountered during getPRreading()\n\n");
+			}
+			return 0;
+		case 5:
+			if(removeLED(sh) != 0)
+			{
+				printf("\n ERROR encountered during removeLED()\n\n");
+			}
+			return 0;
+		case 6:
+			if(removePR(sh) != 0)
+			{
+				printf("\n ERROR encountered during removePR()\n\n");
+			}
+			return 0;
+		case 9:
+			if( reset(sh) != 0)
+			{
+				printf(" ERROR impossible to reset the controller\n\n");
+				return -1;
+			}
+			smartHouseInit(sh,sh->fd);
+			if(start(sh) != 0)
+			{
+				printf("\n ERROR encountered during start()\n\n");
+				return -1;
+			}
+			return 0;
+		case 0:
+			if(save(sh) != 0)
+			{
+				printf("\n ERROR encountered during save()\n\n");
+			}
+			exit(0);
+
+		default:
+			printf(" ERROR invalid input, select one of the available actions (1-5)\n\n");
+			return -1;
+	}
 }
 
 
@@ -748,6 +781,7 @@ int main(void)
 	if(fd == -1)						/* Error Checking */
 	{
 		printf("\n ERROR opening ttyACM0  ");
+		exit(1);
 	}
   else
 	{

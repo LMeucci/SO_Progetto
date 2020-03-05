@@ -107,5 +107,5 @@ implementate save and load (binary)
 se rimuovo un photoresistor il led rimane nell'ultimo stato in cui si trovava prima della rimozione
 
 TO-DO:
-debounce effect e proper timing per letture ADC (15sec)
-test valgrind OnPC_client
+manca un comando reset per la board(inviato da pc) nel caso che l'utente decida di non caricare l'ultima configurazione impostata.
+posizione del comando segnata all'interno di load
