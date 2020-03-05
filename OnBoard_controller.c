@@ -34,7 +34,7 @@
 #define BUTTON_STEP 26
 #define OP_ON 0x4F
 #define OP_OFF 0x46
-#define TIMER_QUARTER_MINUTE 1500  // 10 ms timer x 1500= 15sec
+#define TIMER_DELAY 3000
 #define PIN_ADC_DEFAULT_MASK 0x80
 
 #define CMD_START 0x01
@@ -586,9 +586,9 @@ ISR(TIMER2_COMPA_vect)
                          0=pinA0, 1=pinA1, 2=pinA2,  3=pinA3,
                          4=pinA4, 5=pinA5, 6=pinA6, 7=pinA7 */
 
-  // adc read only once every 15sec
+  // adc read only when timerAuxCompare reach the delay value
   timerAuxCompare++;
-  if(timerAuxCompare == TIMER_QUARTER_MINUTE)
+  if(timerAuxCompare == TIMER_DELAY)
   {
     timerAuxCompare= 0;
 
