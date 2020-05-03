@@ -45,13 +45,13 @@
 #define CMD_REMOVE_LED 0x06
 #define CMD_REMOVE_PR 0x07
 
-#define CMD_START_SIZE 0x05
-#define CMD_RESET_SIZE 0x00
-#define CMD_LED_SETUP_SIZE 0x02
-#define CMD_PR_SETUP_SIZE 0x02
-#define CMD_PR_READING_SIZE 0x01
-#define CMD_REMOVE_LED_SIZE 0x01
-#define CMD_REMOVE_PR_SIZE 0x01
+#define RSP_START_SIZE 0x00
+#define RSP_RESET_SIZE 0x00
+#define RSP_LED_SETUP_SIZE 0x00
+#define RSP_PR_SETUP_SIZE 0x00
+#define RSP_PR_READING_SIZE 0x02
+#define RSP_REMOVE_LED_SIZE 0x00
+#define RSP_REMOVE_PR_SIZE 0x00
 
 #define RSP_ACK 0x41
 #define RSP_NACK 0x4E
@@ -145,7 +145,7 @@ void start(Packet *pck, Packet *rsp)
   {
     /* start response packet */
     rsp->buffer[2]= CMD_START;
-    rsp->buffer[3]= CMD_START_SIZE;
+    rsp->buffer[3]= RSP_START_SIZE;
   }
 }
 
@@ -186,7 +186,7 @@ void reset(Packet *rsp)
 
   /* reset response packet */
   rsp->buffer[2]= CMD_RESET;
-  rsp->buffer[3]= CMD_RESET_SIZE;
+  rsp->buffer[3]= RSP_RESET_SIZE;
 }
 
 void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
@@ -272,7 +272,7 @@ void ledSetup(uint8_t pin, uint8_t brightness, Packet *rsp)
   }
   pinsPWM |= (1<<pin);
   rsp->buffer[2]= CMD_LED_SETUP;
-  rsp->buffer[3]= CMD_LED_SETUP_SIZE;
+  rsp->buffer[3]= RSP_LED_SETUP_SIZE;
 }
 
 void photoresistorSetup(uint8_t pin, uint8_t led, Packet *rsp)
@@ -289,14 +289,14 @@ void photoresistorSetup(uint8_t pin, uint8_t led, Packet *rsp)
   pinsADCtoLED[pin]= led;
 
   rsp->buffer[2]= CMD_PR_SETUP;
-  rsp->buffer[3]= CMD_PR_SETUP_SIZE;
+  rsp->buffer[3]= RSP_PR_SETUP_SIZE;
 }
 
 void photoresistorReading(uint8_t pin, Packet *rsp)
 {
   /* preparing response packet */
   rsp->buffer[2]= CMD_PR_READING;
-  rsp->buffer[3]= CMD_PR_READING_SIZE;
+  rsp->buffer[3]= RSP_PR_READING_SIZE;
   rsp->buffer[4]= (uint8_t) adcReadings[pin];
   rsp->buffer[5]= (uint8_t)(adcReadings[pin]>>8);
 }
@@ -381,7 +381,7 @@ void ledRemove(uint8_t pin, Packet *rsp)
   pinsPWM &= ~(1<<pin);
   /* preparing response packet */
   rsp->buffer[2]= CMD_REMOVE_LED;
-  rsp->buffer[3]= CMD_REMOVE_LED_SIZE;
+  rsp->buffer[3]= RSP_REMOVE_LED_SIZE;
 }
 
 void photoresistorRemove(uint8_t pin, Packet *rsp)
@@ -403,7 +403,7 @@ void photoresistorRemove(uint8_t pin, Packet *rsp)
   }
   /* preparing response packet */
   rsp->buffer[2]= CMD_REMOVE_PR;
-  rsp->buffer[3]= CMD_REMOVE_PR_SIZE;
+  rsp->buffer[3]= RSP_REMOVE_PR_SIZE;
 }
 
 /*---------------------------Packets Handling (received and response)-----------------------*/

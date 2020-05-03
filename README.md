@@ -85,7 +85,7 @@ CMDS PC:
 4- readPR(port): read adc register
 
 5- removeLED(port): Uninstall a led, disable channel or entire pwm if the last pin on pwm on a given timer
-6- removePR(port): Uninstall a PR, zero all register for adc
+6- removePR(port): Uninstall a PR, zero all registers for adc
 
 0x01c5HELLO
 0x02c2##
@@ -98,7 +98,7 @@ CMDS Arduino:
 1- ack= Ac0x01s0
 2- ack= Ac0x02s0
 3- ack= Ac0x03s0
-4- ack= Ac0x04s2## (prima il byte più significativo)
+4- ack= Ac0x04s2## (prima il byte meno significativo)
 5- ack= Ac0x05s0
 6- ack= Ac0x06s0
 
@@ -107,5 +107,3 @@ implementate save and load (binary)
 se rimuovo un photoresistor il led rimane nell'ultimo stato in cui si trovava prima della rimozione
 
 TO-DO:
-manca un comando reset per la board(inviato da pc) nel caso che l'utente decida di non caricare l'ultima configurazione impostata.
-posizione del comando segnata all'interno di load
